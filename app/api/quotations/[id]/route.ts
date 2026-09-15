@@ -5,11 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const quotation = await prisma.quotation.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
         items: { orderBy: { lineNumber: "asc" } },
@@ -35,16 +36,17 @@ export async function GET(
 
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const quotation = await prisma.quotation.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!quotation) {
@@ -67,11 +69,11 @@ export async function PUT(
 
     // Delete old items and create new ones
     await prisma.quotationItem.deleteMany({
-      where: { quotationId: params.id },
+      where: { quotationId: id },
     });
 
     const updated = await prisma.quotation.update({
-      where: { id: params.id },
+      where: { id },
       data: {
         ...quotationData,
         items: {
@@ -100,16 +102,17 @@ export async function PUT(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const quotation = await prisma.quotation.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!quotation) {
@@ -128,7 +131,7 @@ export async function DELETE(
     }
 
     await prisma.quotation.update({
-      where: { id: params.id },
+      where: { id },
       data: { deletedAt: new Date() },
     });
 

@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "No company access" }, { status: 403 });
     }
 
-    const companyIds = user.memberships.map((m) => m.companyId);
+    const companyIds = user.memberships.map((m: any) => m.companyId);
 
     const quotations = await prisma.quotation.findMany({
       where: {
@@ -34,9 +34,9 @@ export async function GET(req: NextRequest) {
     });
 
     // Calculate totals
-    const quotationsWithTotals = quotations.map((q) => ({
+    const quotationsWithTotals = quotations.map((q: any) => ({
       ...q,
-      totalAmount: q.items.reduce((sum, item) => sum + (item.subtotal || 0), 0),
+      totalAmount: q.items.reduce((sum: number, item: any) => sum + (item.subtotal || 0), 0),
     }));
 
     return NextResponse.json(quotationsWithTotals);

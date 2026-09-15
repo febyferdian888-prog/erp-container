@@ -1,8 +1,22 @@
-import { type NextAuthOptions } from "next-auth";
+import { type NextAuthOptions, type DefaultSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 import { z } from "zod";
+
+declare module "next-auth" {
+  interface Session {
+    user: {
+      id: string;
+    } & DefaultSession["user"];
+  }
+}
+
+declare module "next-auth/jwt" {
+  interface JWT {
+    id?: string;
+  }
+}
 
 const loginSchema = z.object({
   email: z.string().email(),

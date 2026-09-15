@@ -6,43 +6,24 @@ async function main() {
 
   // Create Roles
   console.log("Creating roles...");
-  const ownerRole = await prisma.role.upsert({
-    where: { name: "Owner" },
-    update: {},
-    create: { name: "Owner", description: "Owner/Director", isSystem: true },
-  });
 
-  const salesRole = await prisma.role.upsert({
-    where: { name: "Sales" },
-    update: {},
-    create: { name: "Sales", description: "Sales Manager", isSystem: true },
-  });
+  const createOrGetRole = async (name: string, description: string) => {
+    let role = await prisma.role.findFirst({
+      where: { name },
+    });
+    if (!role) {
+      role = await prisma.role.create({
+        data: { name, description, isSystem: true },
+      });
+    }
+    return role;
+  };
 
-  const purchasingRole = await prisma.role.upsert({
-    where: { name: "Purchasing" },
-    update: {},
-    create: {
-      name: "Purchasing",
-      description: "Purchasing Officer",
-      isSystem: true,
-    },
-  });
-
-  const operationalRole = await prisma.role.upsert({
-    where: { name: "Operational" },
-    update: {},
-    create: {
-      name: "Operational",
-      description: "Operational Manager",
-      isSystem: true,
-    },
-  });
-
-  const financeRole = await prisma.role.upsert({
-    where: { name: "Finance" },
-    update: {},
-    create: { name: "Finance", description: "Finance Manager", isSystem: true },
-  });
+  const ownerRole = await createOrGetRole("Owner", "Owner/Director");
+  const salesRole = await createOrGetRole("Sales", "Sales Manager");
+  const purchasingRole = await createOrGetRole("Purchasing", "Purchasing Officer");
+  const operationalRole = await createOrGetRole("Operational", "Operational Manager");
+  const financeRole = await createOrGetRole("Finance", "Finance Manager");
 
   // Create Companies
   console.log("Creating companies...");
@@ -194,10 +175,10 @@ async function main() {
   });
 
   const workshop1 = await prisma.warehouse.upsert({
-    where: { companyId_code: { companyId: companyB.id, code: "WS-01" } },
+    where: { companyId_code: { companyId: companyA.id, code: "WS-01" } },
     update: {},
     create: {
-      companyId: companyB.id,
+      companyId: companyA.id,
       code: "WS-01",
       name: "Workshop Utama",
       type: "workshop",

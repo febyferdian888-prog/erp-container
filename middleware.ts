@@ -1,9 +1,10 @@
 import { withAuth } from "next-auth/middleware";
 import { NextRequest, NextResponse } from "next/server";
+import type { JWT } from "next-auth/jwt";
 
 export const middleware = withAuth(
-  function middleware(req: NextRequest) {
-    const token = req.nextauth.token;
+  function middleware(req: NextRequest & { nextauth?: { token: JWT | null } }) {
+    const token = req.nextauth?.token;
 
     // Check if user has at least one company membership
     if (!token || !token.sub) {

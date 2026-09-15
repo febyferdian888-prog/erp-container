@@ -5,16 +5,17 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const customer = await prisma.customer.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: { company: { select: { id: true, code: true, name: true } } },
     });
 
@@ -46,9 +47,10 @@ export async function GET(
 
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -58,7 +60,7 @@ export async function PUT(
 
     // Verify access
     const customer = await prisma.customer.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!customer) {
@@ -77,7 +79,7 @@ export async function PUT(
     }
 
     const updated = await prisma.customer.update({
-      where: { id: params.id },
+      where: { id },
       data: body,
     });
 
@@ -93,16 +95,17 @@ export async function PUT(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const customer = await prisma.customer.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!customer) {
@@ -122,7 +125,7 @@ export async function DELETE(
 
     // Soft delete
     await prisma.customer.update({
-      where: { id: params.id },
+      where: { id },
       data: { deletedAt: new Date() },
     });
 

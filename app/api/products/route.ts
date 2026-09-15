@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "No company access" }, { status: 403 });
     }
 
-    const companyIds = user.memberships.map((m) => m.companyId);
+    const companyIds = user.memberships.map((m: any) => m.companyId);
 
     const products = await prisma.product.findMany({
       where: {

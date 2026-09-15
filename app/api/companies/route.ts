@@ -21,8 +21,8 @@ export async function GET(req: NextRequest) {
 
     // Return companies user has access to
     const companies = user.memberships
-      .map((m) => m.company)
-      .filter((c) => !c.deletedAt);
+      .map((m: any) => m.company)
+      .filter((c: any) => !c.deletedAt);
 
     return NextResponse.json(companies);
   } catch (error) {
