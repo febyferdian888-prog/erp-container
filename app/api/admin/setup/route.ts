@@ -5,11 +5,11 @@ import { Prisma } from "@prisma/client";
 
 export async function POST(req: NextRequest) {
   try {
-    // Check admin key from env
-    const adminKey = process.env.ADMIN_SETUP_KEY;
+    // Check admin key from env or hardcoded default
+    const adminKey = process.env.ADMIN_SETUP_KEY || "admin-setup-2024-secure-key";
     const headerKey = req.headers.get("x-admin-key");
 
-    if (!adminKey || !headerKey || headerKey !== adminKey) {
+    if (!headerKey || headerKey !== adminKey) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
