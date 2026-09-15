@@ -6,20 +6,39 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node -r ts-node/register prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "setup": "npm install && npx prisma db push && npm run db:seed"
   },
   "dependencies": {
+    "@auth/prisma-adapter": "^2.11.3",
+    "@prisma/client": "^5.8.0",
+    "axios": "^1.20.0",
+    "bcryptjs": "^3.0.3",
     "next": "16.3.5",
+    "next-auth": "^4.24.15",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@radix-ui/react-dropdown-menu": "^2.1.24",
+    "@radix-ui/react-label": "^2.1.15",
+    "@radix-ui/react-slot": "^1.3.3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "lucide-react": "^1.46.0",
+    "prisma": "^5.8.0",
+    "tailwind-merge": "^3.7.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

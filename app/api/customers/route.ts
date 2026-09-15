@@ -1,0 +1,113 @@
+import { prisma } from "@/lib/db";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { NextRequest, NextResponse } from "next/server";
+
+export async function GET(req: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Get user's company memberships
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      include: { memberships: true },
+    });
+
+    if (!user?.memberships.length) {
+      return NextResponse.json({ error: "No company access" }, { status: 403 });
+    }
+
+    const companyIds = user.memberships.map((m) => m.companyId);
+
+    // Get customers for user's companies
+    const customers = await prisma.customer.findMany({
+      where: {
+        companyId: { in: companyIds },
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        email: true,
+        phone: true,
+        city: true,
+        isActive: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return NextResponse.json(customers);
+  } catch (error) {
+    console.error("GET /api/customers error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const body = await req.json();
+    const { companyId, code, name, email, phone, address, city, province, country, postalCode, npwp } = body;
+
+    // Verify user has access to this company
+    const membership = await prisma.userMembership.findUnique({
+      where: {
+        userId_companyId_roleId: {
+          userId: session.user.id!,
+          companyId,
+          roleId: "", // Will be filled by DB constraint
+        },
+      },
+    }).catch(() => null);
+
+    if (!membership) {
+      return NextResponse.json({ error: "No access to this company" }, { status: 403 });
+    }
+
+    // Check if code already exists in this company
+    const existing = await prisma.customer.findUnique({
+      where: { companyId_code: { companyId, code } },
+    });
+
+    if (existing) {
+      return NextResponse.json({ error: "Customer code already exists" }, { status: 400 });
+    }
+
+    const customer = await prisma.customer.create({
+      data: {
+        companyId,
+        code,
+        name,
+        email,
+        phone,
+        address,
+        city,
+        province,
+        country,
+        postalCode,
+        npwp,
+        isActive: true,
+      },
+    });
+
+    return NextResponse.json(customer, { status: 201 });
+  } catch (error) {
+    console.error("POST /api/customers error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}

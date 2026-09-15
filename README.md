@@ -1,4 +1,8 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ERP Container Procurement & Fabrication
+
+Aplikasi ERP web untuk manajemen pengadaan dan fabrikasi container.
+
+**Current Focus**: Tahap 1 Development - PT Maju Jaya Kontainer (PT-A)
 
 ## Getting Started
 
