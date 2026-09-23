@@ -2,9 +2,13 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { recalcSalesOrderStatus } from "@/lib/workflow";
+import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard(["finance"], "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -28,7 +32,6 @@ export async function GET(req: NextRequest) {
       },
       include: {
         customer: { select: { name: true } },
-        items: { select: { subtotal: true } },
       },
       orderBy: { invoiceDate: "desc" },
     });
@@ -42,13 +45,14 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    { const denied = await guard(["finance"], "edit"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await req.json();
-    const { companyId, customerId, invoiceNumber, invoiceDate, dueDate, paymentTerms, notes } =
+    const { companyId, customerId, soId, invoiceDate, dueDate, paymentTerms, ppnPercent, notes, items, pphAmount, pphProofNumber, pphProofDate } =
       body;
 
     const membership = await prisma.userMembership.findFirst({
@@ -59,31 +63,54 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
-    const existing = await prisma.invoice.findUnique({
-      where: { companyId_invoiceNumber: { companyId, invoiceNumber } },
+    const { year, start, end } = currentYearRange();
+    const count = await prisma.invoice.count({
+      where: { companyId, createdAt: { gte: start, lt: end } },
     });
+    const invoiceNumber = formatDocumentNumber("INV", year, count + 1);
 
-    if (existing) {
-      return NextResponse.json({ error: "Invoice number already exists" }, { status: 400 });
-    }
+    const lineItems = (items || []).map((item: any) => ({
+      lineNumber: item.lineNumber,
+      partNumber: item.partNumber,
+      description: item.description,
+      quantity: item.quantity,
+      unit: item.unit,
+      unitPrice: item.unitPrice,
+      subtotal: item.subtotal,
+      notes: item.notes,
+    }));
+    const subtotal = lineItems.reduce((sum: number, i: any) => sum + Number(i.subtotal || 0), 0);
+    const ppn = ppnPercent ?? 11;
+    const taxAmount = (subtotal * ppn) / 100;
+    const grandTotal = subtotal + taxAmount;
+    const pph = Math.min(Math.max(Number(pphAmount) || 0, 0), grandTotal);
 
     const invoice = await prisma.invoice.create({
       data: {
         companyId,
         customerId,
+        soId: soId || null,
         invoiceNumber,
         invoiceDate: new Date(invoiceDate),
         dueDate: dueDate ? new Date(dueDate) : null,
         paymentTerms,
+        ppnPercent: ppn,
+        totalAmount: subtotal,
+        taxAmount,
+        grandTotal,
+        paidAmount: pph, // tax withheld by the customer counts as settled
+        pphAmount: pph,
+        pphPercent: subtotal > 0 ? Math.round((pph / subtotal) * 10000) / 100 : 0,
+        pphProofNumber: pphProofNumber || null,
+        pphProofDate: pphProofDate ? new Date(pphProofDate) : null,
         notes,
         status: "draft",
-        totalAmount: 0,
-        taxAmount: 0,
-        grandTotal: 0,
-        paidAmount: 0,
+        items: { create: lineItems },
       },
-      include: { customer: true },
+      include: { customer: true, items: true },
     });
+
+    await recalcSalesOrderStatus(prisma, invoice.soId);
 
     return NextResponse.json(invoice, { status: 201 });
   } catch (error) {

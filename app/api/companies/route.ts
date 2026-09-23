@@ -2,9 +2,11 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard("any", "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -19,7 +21,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "No company access" }, { status: 403 });
     }
 
-    // Return companies user has access to
     const companies = user.memberships
       .map((m: any) => m.company)
       .filter((c: any) => !c.deletedAt);

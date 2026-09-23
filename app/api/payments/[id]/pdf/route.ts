@@ -1,0 +1,70 @@
+import { prisma } from "@/lib/db";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { renderToBuffer } from "@react-pdf/renderer";
+import { KwitansiPdfDocument, KwitansiPdfData } from "@/lib/kwitansi-pdf";
+import { guard } from "@/lib/rbac";
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    { const denied = await guard(["finance"], "view"); if (denied) return denied; }
+    const { id } = await params;
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const payment = await prisma.payment.findUnique({
+      where: { id },
+      include: { company: true, customer: true },
+    });
+
+    if (!payment) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const membership = await prisma.userMembership.findFirst({
+      where: { userId: session.user.id, companyId: payment.companyId },
+    });
+    if (!membership) {
+      return NextResponse.json({ error: "No access" }, { status: 403 });
+    }
+
+    const data: KwitansiPdfData = {
+      paymentNumber: payment.paymentNumber,
+      paymentDate: payment.paymentDate.toISOString(),
+      amount: Number(payment.amount),
+      method: payment.method,
+      description: payment.description,
+      company: {
+        name: payment.company.name,
+        description: payment.company.description,
+        address: payment.company.address,
+        city: payment.company.city,
+        province: payment.company.province,
+        postalCode: payment.company.postalCode,
+        phone: payment.company.phone,
+        email: payment.company.email,
+        npwp: payment.company.npwp,
+      },
+      customerName: payment.customer?.name || "-",
+    };
+
+    const buffer = await renderToBuffer(KwitansiPdfDocument({ data }));
+
+    return new NextResponse(new Uint8Array(buffer), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `inline; filename="${payment.paymentNumber}.pdf"`,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/payments/[id]/pdf error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}

@@ -5,15 +5,19 @@ import { Prisma } from "@prisma/client";
 
 export async function POST(req: NextRequest) {
   try {
-    // TODO: Re-enable admin key auth after testing
-    // Check admin key from env or hardcoded default
-    // const adminKey = process.env.ADMIN_SETUP_KEY || "admin-setup-2024-secure-key";
-    // const headerKey = req.headers.get("x-admin-key");
-    // if (!headerKey || headerKey !== adminKey) {
-    //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    // }
+    const adminKey = process.env.ADMIN_SETUP_KEY;
+    if (!adminKey) {
+      return NextResponse.json(
+        { error: "ADMIN_SETUP_KEY is not configured" },
+        { status: 500 }
+      );
+    }
 
-    // Check if data already exists
+    const headerKey = req.headers.get("x-admin-key");
+    if (!headerKey || headerKey !== adminKey) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const existingCompany = await prisma.company.findFirst();
     if (existingCompany) {
       return NextResponse.json(
@@ -22,7 +26,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create Units
     const unit1 = await prisma.unit.create({
       data: {
         name: "Meter",
@@ -50,7 +53,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create Categories
     const cat1 = await prisma.productCategory.create({
       data: {
         name: "Steel",
@@ -67,7 +69,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create Roles
     const roleAdmin = await prisma.role.create({
       data: {
         name: "Admin",
@@ -75,7 +76,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create Company
     const company = await prisma.company.create({
       data: {
         name: "PT. Anda",
@@ -85,7 +85,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create User
     const hashedPassword = await bcryptjs.hash("admin123", 10);
     const user = await prisma.user.create({
       data: {
@@ -95,7 +94,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create User Membership
     await prisma.userMembership.create({
       data: {
         userId: user.id,
@@ -104,7 +102,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create Suppliers
     const supplier1 = await prisma.supplier.create({
       data: {
         companyId: company.id,
@@ -120,7 +117,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create Customers
     const customer1 = await prisma.customer.create({
       data: {
         companyId: company.id,
@@ -136,7 +132,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create Products
     const product1 = await prisma.product.create({
       data: {
         companyId: company.id,

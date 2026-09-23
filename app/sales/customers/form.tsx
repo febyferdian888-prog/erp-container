@@ -106,7 +106,6 @@ export function CustomerForm({ customerId, companyId }: CustomerFormProps) {
 
   return (
     <div className="max-w-2xl">
-      {/* Back Button */}
       <button
         onClick={() => router.back()}
         className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6"
@@ -115,7 +114,6 @@ export function CustomerForm({ customerId, companyId }: CustomerFormProps) {
         Back to Customers
       </button>
 
-      {/* Form Card */}
       <Card>
         <CardHeader>
           <CardTitle>
@@ -130,7 +128,6 @@ export function CustomerForm({ customerId, companyId }: CustomerFormProps) {
               </div>
             )}
 
-            {/* Basic Info */}
             <div className="space-y-4">
               <h3 className="font-semibold text-slate-900">Basic Information</h3>
 
@@ -196,7 +193,6 @@ export function CustomerForm({ customerId, companyId }: CustomerFormProps) {
               </div>
             </div>
 
-            {/* Address Info */}
             <div className="space-y-4 border-t pt-4">
               <h3 className="font-semibold text-slate-900">Address</h3>
 
@@ -256,7 +252,6 @@ export function CustomerForm({ customerId, companyId }: CustomerFormProps) {
               </div>
             </div>
 
-            {/* Form Actions */}
             <div className="flex gap-3 border-t pt-6">
               <Button
                 type="button"

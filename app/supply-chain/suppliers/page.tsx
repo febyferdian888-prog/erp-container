@@ -94,7 +94,6 @@ export default function SuppliersPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">Suppliers</h1>
@@ -109,7 +108,6 @@ export default function SuppliersPage() {
           </Button>
         </div>
 
-        {/* Search */}
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
@@ -124,14 +122,12 @@ export default function SuppliersPage() {
           </CardContent>
         </Card>
 
-        {/* Error Message */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800 text-sm">
             {error}
           </div>
         )}
 
-        {/* Table */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
@@ -191,7 +187,7 @@ export default function SuppliersPage() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell>{supplier.city || "—"}</TableCell>
+                        <TableCell>{supplier.city || "-"}</TableCell>
                         <TableCell>
                           {supplier.bankName ? (
                             <div className="flex items-center gap-1 text-slate-600 text-sm">
@@ -199,12 +195,12 @@ export default function SuppliersPage() {
                               {supplier.bankName}
                             </div>
                           ) : (
-                            "—"
+                            "-"
                           )}
                         </TableCell>
                         <TableCell>
                           <span
-                            className={`px-2 py-1 rounded text-xs font-medium ${
+                            className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
                               supplier.isActive
                                 ? "bg-green-100 text-green-800"
                                 : "bg-slate-100 text-slate-800"

@@ -2,9 +2,11 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard("any", "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -45,6 +47,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    { const denied = await guard(["purchasing", "operational"], "edit"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

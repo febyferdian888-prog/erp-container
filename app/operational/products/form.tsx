@@ -139,7 +139,6 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
 
   return (
     <div className="max-w-2xl">
-      {/* Back Button */}
       <button
         onClick={() => router.back()}
         className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6"
@@ -148,7 +147,6 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
         Back to Products
       </button>
 
-      {/* Form Card */}
       <Card>
         <CardHeader>
           <CardTitle>
@@ -163,7 +161,6 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
               </div>
             )}
 
-            {/* Basic Info */}
             <div className="space-y-4">
               <h3 className="font-semibold text-slate-900">Product Information</h3>
 
@@ -208,7 +205,6 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
               </div>
             </div>
 
-            {/* Classification */}
             <div className="space-y-4 border-t pt-4">
               <h3 className="font-semibold text-slate-900">Classification</h3>
 
@@ -251,7 +247,6 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
               </div>
             </div>
 
-            {/* Pricing */}
             <div className="space-y-4 border-t pt-4">
               <h3 className="font-semibold text-slate-900">Pricing</h3>
 
@@ -273,7 +268,6 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
               </div>
             </div>
 
-            {/* Form Actions */}
             <div className="flex gap-3 border-t pt-6">
               <Button
                 type="button"

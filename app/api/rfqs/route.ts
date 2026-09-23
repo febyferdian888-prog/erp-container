@@ -2,9 +2,12 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard(["sales"], "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -41,32 +44,35 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    { const denied = await guard(["sales"], "edit"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await req.json();
-    const { companyId, customerId, number, title, description, requestDate, targetDate, notes } =
-      body;
+    const { companyId, customerId, title, description, requestDate, targetDate, notes } = body;
 
-    // Verify user has access
-    const membership = await prisma.userMembership.findFirst({
-      where: { userId: session.user.id, companyId },
-    }).catch(() => null);
+    if (!companyId || !customerId || !requestDate) {
+      return NextResponse.json(
+        { error: "companyId, customerId, and requestDate are required" },
+        { status: 400 }
+      );
+    }
+
+    const membership = await prisma.userMembership
+      .findFirst({ where: { userId: session.user.id, companyId } })
+      .catch(() => null);
 
     if (!membership) {
       return NextResponse.json({ error: "No access to this company" }, { status: 403 });
     }
 
-    // Check unique number
-    const existing = await prisma.rFQ.findUnique({
-      where: { companyId_number: { companyId, number } },
+    const { year, start, end } = currentYearRange();
+    const count = await prisma.rFQ.count({
+      where: { companyId, createdAt: { gte: start, lt: end } },
     });
-
-    if (existing) {
-      return NextResponse.json({ error: "RFQ number already exists" }, { status: 400 });
-    }
+    const number = formatDocumentNumber("RFQ", year, count + 1);
 
     const rfq = await prisma.rFQ.create({
       data: {
@@ -79,6 +85,7 @@ export async function POST(req: NextRequest) {
         targetDate: targetDate ? new Date(targetDate) : null,
         notes,
         status: "draft",
+        createdBy: session.user.email,
       },
       include: { customer: true },
     });

@@ -2,9 +2,12 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard("any", "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -27,9 +30,9 @@ export async function GET(req: NextRequest) {
         deletedAt: null,
       },
       include: {
-        customer: { select: { name: true } },
-        quotation: { select: { number: true } },
-        project: { select: { projectNumber: true } },
+        customer: { select: { id: true, name: true, code: true } },
+        quotation: { select: { id: true, number: true } },
+        items: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -43,42 +46,62 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    { const denied = await guard(["sales"], "edit"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await req.json();
-    const { companyId, customerId, soNumber, poNumber, poDate, deliveryDate, notes } = body;
+    const {
+      companyId,
+      customerId,
+      quotationId,
+      poNumber,
+      poDate,
+      deliveryDate,
+      notes,
+      items,
+    } = body;
 
-    const membership = await prisma.userMembership.findFirst({
-      where: { userId: session.user.id, companyId },
-    }).catch(() => null);
-
-    if (!membership) {
-      return NextResponse.json({ error: "No access" }, { status: 403 });
+    if (!companyId || !customerId || !poNumber || !poDate || !items?.length) {
+      return NextResponse.json(
+        { error: "companyId, customerId, poNumber, poDate, and at least one item are required" },
+        { status: 400 }
+      );
     }
 
-    const existing = await prisma.salesOrder.findUnique({
-      where: { companyId_soNumber: { companyId, soNumber } },
+    const { year, start, end } = currentYearRange();
+    const count = await prisma.salesOrder.count({
+      where: { companyId, createdAt: { gte: start, lt: end } },
     });
-
-    if (existing) {
-      return NextResponse.json({ error: "SO number already exists" }, { status: 400 });
-    }
+    const soNumber = formatDocumentNumber("SO", year, count + 1);
 
     const salesOrder = await prisma.salesOrder.create({
       data: {
         companyId,
         customerId,
-        soNumber,
+        quotationId: quotationId || null,
         poNumber,
         poDate: new Date(poDate),
+        soNumber,
         deliveryDate: deliveryDate ? new Date(deliveryDate) : null,
         notes,
-        status: "draft",
+        createdBy: session.user.email,
+        items: {
+          create: items.map((item: any, index: number) => ({
+            lineNumber: index + 1,
+            partNumber: item.partNumber || null,
+            description: item.description,
+            quantity: item.quantity,
+            unit: item.unit,
+            unitPrice: item.unitPrice,
+            subtotal: Number(item.quantity) * Number(item.unitPrice),
+            notes: item.notes,
+          })),
+        },
       },
-      include: { customer: true },
+      include: { customer: true, items: true },
     });
 
     return NextResponse.json(salesOrder, { status: 201 });

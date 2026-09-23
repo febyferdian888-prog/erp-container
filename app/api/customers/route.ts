@@ -2,15 +2,16 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard("any", "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Get user's company memberships
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
       include: { memberships: true },
@@ -22,7 +23,6 @@ export async function GET(req: NextRequest) {
 
     const companyIds = user.memberships.map((m: any) => m.companyId);
 
-    // Get customers for user's companies
     const customers = await prisma.customer.findMany({
       where: {
         companyId: { in: companyIds },
@@ -53,6 +53,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    { const denied = await guard(["sales"], "edit"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -61,7 +62,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { companyId, code, name, email, phone, address, city, province, country, postalCode, npwp } = body;
 
-    // Verify user has access to this company
     const membership = await prisma.userMembership.findUnique({
       where: {
         userId_companyId_roleId: {
@@ -76,7 +76,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No access to this company" }, { status: 403 });
     }
 
-    // Check if code already exists in this company
     const existing = await prisma.customer.findUnique({
       where: { companyId_code: { companyId, code } },
     });

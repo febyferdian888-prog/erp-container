@@ -2,12 +2,14 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/rbac";
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    { const denied = await guard("any", "view"); if (denied) return denied; }
     const { id } = await params;
     const product = await prisma.product.findUnique({
       where: { id },
@@ -33,6 +35,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    { const denied = await guard(["purchasing", "operational"], "edit"); if (denied) return denied; }
     const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
@@ -69,6 +72,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    { const denied = await guard(["purchasing", "operational"], "edit"); if (denied) return denied; }
     const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {

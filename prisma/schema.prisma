@@ -6,8 +6,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ============================================================================
@@ -114,15 +115,18 @@ model Company {
   projects          Project[]
   rfqs              RFQ[]
   quotations        Quotation[]
+  purchaseRequests  PurchaseRequest[]
   purchaseOrders    PurchaseOrder[]
   salesOrders       SalesOrder[]
   invoices          Invoice[]
+  deliveries        Delivery[]
   bills             Bill[]
   payments          Payment[]
   goodsReceipts     GoodsReceipt[]
   workOrders        WorkOrder[]
   journalEntries    JournalEntry[]
   chartOfAccounts   ChartOfAccount[]
+  priceInquiries    PriceInquiry[]
   employees         Employee[]
 
   @@map("companies")
@@ -159,6 +163,8 @@ model Customer {
   quotations    Quotation[]
   salesOrders   SalesOrder[]
   invoices      Invoice[]
+  deliveries    Delivery[]
+  payments      Payment[]
   projects      Project[]
 
   @@unique([companyId, code])
@@ -213,6 +219,9 @@ model Supplier {
   purchaseOrders PurchaseOrder[]
   rfqs          SupplierRFQ[]
   bills         Bill[]
+  payments      Payment[]
+  inquiryVendors PriceInquiryVendor[]
+  priceQuotes   PriceQuote[]
 
   @@unique([companyId, code])
   @@index([companyId])
@@ -321,6 +330,8 @@ model Warehouse {
   locations     Location[]
   stocks        Stock[]
   stockMovements StockMovement[]
+  goodsReceipts GoodsReceipt[]
+  deliveries    Delivery[]
 
   @@unique([companyId, code])
   @@index([companyId])
@@ -457,6 +468,9 @@ model Quotation {
   expiryDate      DateTime
   paymentTerms    String? // DP 30%, Progress 40%, Final 30%
   validityDays    Int      @default(14)
+  pic             String? // Attn / person in charge at the customer
+  ppnPercent      Decimal  @default(11) @db.Decimal(5, 2)
+  pphPercent      Decimal  @default(0) @db.Decimal(5, 2)
   status          String   @default("draft") // draft, sent, accepted, rejected, expired, cancelled
   notes           String?
   createdBy       String?
@@ -471,7 +485,6 @@ model Quotation {
   // Relations
   items           QuotationItem[]
   revisions       QuotationRevision[]
-  approvals       Approval[]
   salesOrders     SalesOrder[]
 
   @@unique([companyId, number])
@@ -484,6 +497,7 @@ model QuotationItem {
   id            String   @id @default(cuid())
   quotationId   String
   lineNumber    Int
+  partNumber    String?
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
@@ -541,6 +555,10 @@ model SalesOrder {
   items         SalesOrderItem[]
   deliveries    Delivery[]
   invoices      Invoice[]
+  purchaseOrders PurchaseOrder[]
+  bills         Bill[]
+  billItems     BillItem[]
+  priceInquiries PriceInquiry[]
 
   @@unique([companyId, soNumber])
   @@index([companyId])
@@ -553,6 +571,7 @@ model SalesOrderItem {
   id            String   @id @default(cuid())
   soId          String
   lineNumber    Int
+  partNumber    String?
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
@@ -601,6 +620,7 @@ model Project {
   workOrders        WorkOrder[]
   boms              BOM[]
   stages            ProjectStage[]
+  purchaseRequests  PurchaseRequest[]
   purchaseOrders    PurchaseOrder[]
   timesheets        Timesheet[]
   reimbursements    Reimbursement[]
@@ -708,11 +728,62 @@ model BOMItem {
 // Purchase Module
 // ============================================================================
 
+model PurchaseRequest {
+  id            String   @id @default(cuid())
+  companyId     String
+  projectId     String?
+  requestNumber String   // PR-2024-001 per company
+  requestDate   DateTime
+  requiredDate  DateTime?
+  requestedBy   String? // Name of the requesting employee/department contact
+  department    String? // Sales, Operational, Workshop, etc.
+  status        String   @default("draft") // draft, pending_approval, approved, rejected, converted_to_po, cancelled
+  notes         String?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  // Relations
+  items         PurchaseRequestItem[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([companyId, requestNumber])
+  @@index([companyId])
+  @@index([projectId])
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestItem {
+  id             String   @id @default(cuid())
+  prId           String
+  productId      String?
+  lineNumber     Int
+  description    String
+  quantity       Decimal  @db.Decimal(19, 4)
+  unit           String?
+  estimatedPrice Decimal  @db.Decimal(19, 2) @default(0)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  purchaseRequest PurchaseRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+
+  @@unique([prId, lineNumber])
+  @@index([prId])
+  @@map("purchase_request_items")
+}
+
 model PurchaseOrder {
   id            String   @id @default(cuid())
   companyId     String
   supplierId    String
   projectId     String?
+  prId          String?
+  soId          String?
   poNumber      String   // PO-2024-001 per company
   poDate        DateTime
   deliveryDate  DateTime?
@@ -727,15 +798,19 @@ model PurchaseOrder {
   company       Company  @relation(fields: [companyId], references: [id])
   supplier      Supplier @relation(fields: [supplierId], references: [id])
   project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  purchaseRequest PurchaseRequest? @relation(fields: [prId], references: [id], onDelete: SetNull)
+  salesOrder    SalesOrder? @relation(fields: [soId], references: [id], onDelete: SetNull)
 
   // Relations
   items         PurchaseOrderItem[]
   receipts      GoodsReceipt[]
   bills         Bill[]
+  inquiryItems  PriceInquiryItem[]
 
   @@unique([companyId, poNumber])
   @@index([companyId])
   @@index([supplierId])
+  @@index([soId])
   @@map("purchase_orders")
 }
 
@@ -766,6 +841,7 @@ model GoodsReceipt {
   id            String   @id @default(cuid())
   companyId     String
   poId          String
+  warehouseId   String?
   receiptNumber String   // GR-2024-001
   receiptDate   DateTime
   status        String   @default("draft") // draft, received, inspected, accepted, rejected
@@ -777,6 +853,7 @@ model GoodsReceipt {
 
   company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  warehouse     Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
   // Relations
   items         GoodsReceiptItem[]
@@ -820,9 +897,14 @@ model Invoice {
   paymentTerms  String?
   status        String   @default("draft") // draft, sent, partial_paid, paid, overdue, cancelled
   totalAmount   Decimal  @db.Decimal(19, 2)
+  ppnPercent    Decimal  @default(11) @db.Decimal(5, 2)
   taxAmount     Decimal  @db.Decimal(19, 2) @default(0)
   grandTotal    Decimal  @db.Decimal(19, 2)
-  paidAmount    Decimal  @db.Decimal(19, 2) @default(0)
+  paidAmount    Decimal  @db.Decimal(19, 2) @default(0) // cash received + PPh withheld by the customer
+  pphPercent    Decimal  @default(0) @db.Decimal(5, 2) // PPh 23 withheld by the customer (informational rate)
+  pphAmount     Decimal  @default(0) @db.Decimal(19, 2)
+  pphProofNumber String? // bukti potong received from the customer
+  pphProofDate  DateTime?
   notes         String?
   createdBy     String?
   createdAt     DateTime @default(now())
@@ -836,6 +918,7 @@ model Invoice {
   // Relations
   items         InvoiceItem[]
   paymentAllocations PaymentAllocation[]
+  deliveries    Delivery[]
 
   @@unique([companyId, invoiceNumber])
   @@index([companyId])
@@ -847,6 +930,7 @@ model InvoiceItem {
   id            String   @id @default(cuid())
   invoiceId     String
   lineNumber    Int
+  partNumber    String?
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
@@ -868,15 +952,23 @@ model Bill {
   companyId     String
   supplierId    String
   poId          String?
+  soId          String? // customer order this cost belongs to (when there is no PO)
+  vendorInvoiceNumber String? // the vendor's own invoice number
   billNumber    String   // BILL-2024-001
   billDate      DateTime
   dueDate       DateTime?
   paymentTerms  String?
   status        String   @default("draft") // draft, received, partial_paid, paid, overdue, cancelled
   totalAmount   Decimal  @db.Decimal(19, 2)
+  ppnPercent    Decimal  @default(11) @db.Decimal(5, 2)
   taxAmount     Decimal  @db.Decimal(19, 2) @default(0)
   grandTotal    Decimal  @db.Decimal(19, 2)
-  paidAmount    Decimal  @db.Decimal(19, 2) @default(0)
+  paidAmount    Decimal  @db.Decimal(19, 2) @default(0) // cash paid + PPh withheld from the vendor
+  pphPercent    Decimal  @default(0) @db.Decimal(5, 2) // PPh 23 we withhold from the vendor
+  pphAmount     Decimal  @default(0) @db.Decimal(19, 2)
+  pphProofNumber String? // bukti potong we issued
+  pphProofDate  DateTime?
+  pphRemittedAt DateTime? // date we paid the withheld tax to the tax office
   notes         String?
   createdBy     String?
   createdAt     DateTime @default(now())
@@ -886,6 +978,7 @@ model Bill {
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   purchaseOrder PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: SetNull)
+  salesOrder    SalesOrder? @relation(fields: [soId], references: [id], onDelete: SetNull)
 
   // Relations
   items         BillItem[]
@@ -901,6 +994,8 @@ model BillItem {
   id            String   @id @default(cuid())
   billId        String
   lineNumber    Int
+  partNumber    String?
+  soId          String? // customer order this line was bought for (overrides the bill's soId)
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
@@ -911,8 +1006,10 @@ model BillItem {
   updatedAt     DateTime @updatedAt
 
   bill          Bill    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  salesOrder    SalesOrder? @relation(fields: [soId], references: [id], onDelete: SetNull)
 
   @@unique([billId, lineNumber])
+  @@index([soId])
   @@index([billId])
   @@map("bill_items")
 }
@@ -920,25 +1017,32 @@ model BillItem {
 model Payment {
   id            String   @id @default(cuid())
   companyId     String
-  referenceType String   // Invoice, Bill
-  referenceId   String   // Invoice ID or Bill ID
-  paymentNumber String   // PAY-2024-001
+  customerId    String? // who the kwitansi (receipt) was issued to
+  supplierId    String? // vendor this payment was paid to
+  referenceType String? // Invoice, Bill
+  referenceId   String? // Invoice ID or Bill ID
+  paymentNumber String   // KW-2024-001
   paymentDate   DateTime
   amount        Decimal  @db.Decimal(19, 2)
   method        String   // cash, transfer, check
   bankAccount   String?
+  description   String? // what the payment/kwitansi is for
   notes         String?
   status        String   @default("recorded") // recorded, cleared, reversed
   createdBy     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer      Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier      Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
   // Relations
   allocations   PaymentAllocation[]
 
   @@index([companyId])
+  @@index([customerId])
+  @@index([supplierId])
   @@index([referenceType, referenceId])
   @@map("payments")
 }
@@ -992,6 +1096,8 @@ model JournalEntry {
   description   String?
   status        String   @default("draft") // draft, posted, reversed
   reversedId    String? // If this is a reversal, link to original
+  sourceType    String? // Set for system-generated entries: Invoice, Payment, Bill, Reimbursement
+  sourceId      String?
   createdBy     String?
   postedBy      String?
   postedAt      DateTime?
@@ -1006,6 +1112,7 @@ model JournalEntry {
   @@unique([companyId, entryNumber])
   @@index([companyId])
   @@index([status])
+  @@index([sourceType, sourceId])
   @@map("journal_entries")
 }
 
@@ -1095,6 +1202,9 @@ model Leave {
   days          Int
   reason        String?
   status        String   @default("pending") // pending, approved, rejected, cancelled
+  amount        Decimal? @db.Decimal(19, 2) // document total at request time
+  requestedBy   String? // User ID
+  documentLabel String? // e.g. PO number, for display
   approvedBy    String? // User ID
   approvedAt    DateTime?
   notes         String?
@@ -1143,6 +1253,8 @@ model Attachment {
   fileSize      Int
   fileType      String? // image, pdf, doc, etc.
   filePath      String? // S3 path or local path
+  mimeType      String?
+  data          Bytes? // file content, stored in the database
   uploadedBy    String? // User ID
   uploadedAt    DateTime @default(now())
   createdAt     DateTime @default(now())
@@ -1179,13 +1291,15 @@ model Approval {
   referenceId   String
   approverRole  String   // Role required to approve
   status        String   @default("pending") // pending, approved, rejected
+  amount        Decimal? @db.Decimal(19, 2) // document total at request time
+  requestedBy   String? // User ID
+  documentLabel String? // e.g. PO number, for display
   approvedBy    String? // User ID
   approvedAt    DateTime?
   notes         String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  quotation     Quotation? @relation(fields: [referenceId], references: [id], onDelete: Cascade)
 
   @@index([referenceType, referenceId])
   @@index([approverRole, status])
@@ -1216,23 +1330,36 @@ model SupplierRFQ {
 }
 
 model Delivery {
-  id            String   @id @default(cuid())
-  soId          String
-  deliveryNumber String // DEL-2024-001
-  deliveryDate  DateTime
-  status        String   @default("draft") // draft, in_transit, delivered, accepted, cancelled
-  notes         String?
-  createdBy     String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  deletedAt     DateTime?
+  id              String   @id @default(cuid())
+  companyId       String
+  customerId      String
+  soId            String?
+  invoiceId       String?
+  warehouseId     String?
+  deliveryNumber  String // SJ-2024-001
+  deliveryDate    DateTime
+  vehicleNumber   String?
+  driverName      String?
+  shippingAddress String?
+  status          String   @default("draft") // draft, in_transit, delivered, accepted, cancelled
+  notes           String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
 
-  salesOrder    SalesOrder @relation(fields: [soId], references: [id], onDelete: Cascade)
+  company       Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer      Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  salesOrder    SalesOrder? @relation(fields: [soId], references: [id], onDelete: SetNull)
+  invoice       Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  warehouse     Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
-  // Relations (placeholder)
+  // Relations
   items         DeliveryItem[]
 
-  @@unique([id])
+  @@unique([companyId, deliveryNumber])
+  @@index([companyId])
+  @@index([customerId])
   @@index([soId])
   @@map("deliveries")
 }
@@ -1240,7 +1367,9 @@ model Delivery {
 model DeliveryItem {
   id            String   @id @default(cuid())
   deliveryId    String
+  productId     String?
   lineNumber    Int
+  partNumber    String?
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
@@ -1253,4 +1382,86 @@ model DeliveryItem {
   @@unique([deliveryId, lineNumber])
   @@index([deliveryId])
   @@map("delivery_items")
+}
+
+// ============================================================================
+// Vendor price comparison (permintaan harga)
+// ============================================================================
+
+model PriceInquiry {
+  id            String   @id @default(cuid())
+  companyId     String
+  number        String   // PH-2026-0001
+  title         String
+  inquiryDate   DateTime
+  neededDate    DateTime?
+  soId          String? // customer order these purchases are for
+  status        String   @default("draft") // draft, open, awarded, closed, cancelled
+  notes         String?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  salesOrder    SalesOrder? @relation(fields: [soId], references: [id], onDelete: SetNull)
+
+  items         PriceInquiryItem[]
+  vendors       PriceInquiryVendor[]
+
+  @@unique([companyId, number])
+  @@index([companyId])
+  @@map("price_inquiries")
+}
+
+model PriceInquiryVendor {
+  id            String   @id @default(cuid())
+  inquiryId     String
+  supplierId    String
+  createdAt     DateTime @default(now())
+
+  inquiry       PriceInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([inquiryId, supplierId])
+  @@map("price_inquiry_vendors")
+}
+
+model PriceInquiryItem {
+  id            String   @id @default(cuid())
+  inquiryId     String
+  lineNumber    Int
+  partNumber    String?
+  description   String
+  quantity      Decimal  @db.Decimal(19, 4)
+  unit          String?
+  awardedSupplierId String? // vendor chosen for this line
+  poId          String? // purchase order created from the award
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  inquiry       PriceInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: SetNull)
+  quotes        PriceQuote[]
+
+  @@unique([inquiryId, lineNumber])
+  @@index([inquiryId])
+  @@map("price_inquiry_items")
+}
+
+model PriceQuote {
+  id            String   @id @default(cuid())
+  itemId        String
+  supplierId    String
+  unitPrice     Decimal  @db.Decimal(19, 2) // before PPN
+  leadTimeDays  Int?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  item          PriceInquiryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, supplierId])
+  @@map("price_quotes")
 }

@@ -2,12 +2,14 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/rbac";
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    { const denied = await guard("any", "view"); if (denied) return denied; }
     const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
@@ -23,7 +25,6 @@ export async function GET(
       return NextResponse.json({ error: "Customer not found" }, { status: 404 });
     }
 
-    // Verify user has access to this company
     const membership = await prisma.userMembership.findFirst({
       where: {
         userId: session.user.id,
@@ -50,6 +51,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    { const denied = await guard(["sales"], "edit"); if (denied) return denied; }
     const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
@@ -58,7 +60,6 @@ export async function PUT(
 
     const body = await req.json();
 
-    // Verify access
     const customer = await prisma.customer.findUnique({
       where: { id },
     });
@@ -98,6 +99,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    { const denied = await guard(["sales"], "edit"); if (denied) return denied; }
     const { id } = await params;
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {

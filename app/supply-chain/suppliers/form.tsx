@@ -16,7 +16,7 @@ interface SupplierFormProps {
 
 export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
   const router = useRouter();
-  const { status } = useSession();
+  const { status: _status } = useSession();
   const [loading, setLoading] = useState(!!supplierId);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +110,6 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
 
   return (
     <div className="max-w-2xl">
-      {/* Back Button */}
       <button
         onClick={() => router.back()}
         className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6"
@@ -119,7 +118,6 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
         Back to Suppliers
       </button>
 
-      {/* Form Card */}
       <Card>
         <CardHeader>
           <CardTitle>
@@ -134,7 +132,6 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
               </div>
             )}
 
-            {/* Basic Info */}
             <div className="space-y-4">
               <h3 className="font-semibold text-slate-900">Basic Information</h3>
 
@@ -200,7 +197,6 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
               </div>
             </div>
 
-            {/* Address Info */}
             <div className="space-y-4 border-t pt-4">
               <h3 className="font-semibold text-slate-900">Address</h3>
 
@@ -260,7 +256,6 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
               </div>
             </div>
 
-            {/* Banking Info */}
             <div className="space-y-4 border-t pt-4">
               <h3 className="font-semibold text-slate-900">Banking Information</h3>
 
@@ -288,7 +283,6 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
               </div>
             </div>
 
-            {/* Form Actions */}
             <div className="flex gap-3 border-t pt-6">
               <Button
                 type="button"

@@ -32,7 +32,6 @@ export default function NewCustomerPage() {
           }
         } catch (err) {
           console.error("Error fetching companies:", err);
-          // Fallback: will need to create /api/companies endpoint
         }
       };
       getCompanyId();

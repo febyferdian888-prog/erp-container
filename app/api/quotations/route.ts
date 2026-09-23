@@ -2,9 +2,11 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { guard } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
+    { const denied = await guard(["sales"], "view"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -33,11 +35,15 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
     });
 
-    // Calculate totals
-    const quotationsWithTotals = quotations.map((q: any) => ({
-      ...q,
-      totalAmount: q.items.reduce((sum: number, item: any) => sum + (item.subtotal || 0), 0),
-    }));
+    const quotationsWithTotals = quotations.map((q: any) => {
+      const subtotal = q.items.reduce(
+        (sum: number, item: any) => sum + Number(item.subtotal || 0),
+        0
+      );
+      const ppn = (subtotal * Number(q.ppnPercent)) / 100;
+      const pph = (subtotal * Number(q.pphPercent)) / 100;
+      return { ...q, totalAmount: subtotal + ppn - pph };
+    });
 
     return NextResponse.json(quotationsWithTotals);
   } catch (error) {
@@ -48,14 +54,27 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    { const denied = await guard(["sales"], "edit"); if (denied) return denied; }
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await req.json();
-    const { companyId, customerId, number, quotationDate, expiryDate, paymentTerms, notes, items } =
-      body;
+    const {
+      companyId,
+      customerId,
+      number,
+      quotationDate,
+      expiryDate,
+      paymentTerms,
+      validityDays,
+      pic,
+      ppnPercent,
+      pphPercent,
+      notes,
+      items,
+    } = body;
 
     const membership = await prisma.userMembership.findFirst({
       where: { userId: session.user.id, companyId },
@@ -81,17 +100,23 @@ export async function POST(req: NextRequest) {
         quotationDate: new Date(quotationDate),
         expiryDate: new Date(expiryDate),
         paymentTerms,
+        validityDays: validityDays ?? 14,
+        pic,
+        ppnPercent: ppnPercent ?? 11,
+        pphPercent: pphPercent ?? 0,
         notes,
         status: "draft",
         revisionNumber: 1,
         items: {
           create: (items || []).map((item: any) => ({
             lineNumber: item.lineNumber,
+            partNumber: item.partNumber,
             description: item.description,
             quantity: item.quantity,
             unit: item.unit,
             unitPrice: item.unitPrice,
             subtotal: item.subtotal,
+            notes: item.notes,
           })),
         },
       },

@@ -15,7 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Search, Eye, Trash2, FileText, Calendar, User } from "lucide-react";
+import { Plus, Search, Edit, Trash2, FileText, Calendar, User } from "lucide-react";
 
 interface RFQ {
   id: string;
@@ -103,7 +103,6 @@ export default function RFQPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">
@@ -119,7 +118,6 @@ export default function RFQPage() {
           </Button>
         </div>
 
-        {/* Search */}
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
@@ -134,14 +132,12 @@ export default function RFQPage() {
           </CardContent>
         </Card>
 
-        {/* Error */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800 text-sm">
             {error}
           </div>
         )}
 
-        {/* Table */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{filteredRFQs.length} RFQ(s)</CardTitle>
@@ -184,7 +180,7 @@ export default function RFQPage() {
                           </div>
                         </TableCell>
                         <TableCell className="max-w-xs truncate">
-                          {rfq.title || "—"}
+                          {rfq.title || "-"}
                         </TableCell>
                         <TableCell className="text-sm">
                           <div className="space-y-1">
@@ -201,7 +197,7 @@ export default function RFQPage() {
                         </TableCell>
                         <TableCell>
                           <span
-                            className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(
+                            className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${getStatusColor(
                               rfq.status
                             )}`}
                           >
@@ -214,7 +210,7 @@ export default function RFQPage() {
                             size="sm"
                             onClick={() => router.push(`/sales/rfq/${rfq.id}`)}
                           >
-                            <Eye size={16} />
+                            <Edit size={16} />
                           </Button>
                           <Button
                             variant="ghost"
