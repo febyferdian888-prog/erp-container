@@ -77,6 +77,9 @@ export function DeliveryForm({ deliveryId, companyId }: DeliveryFormProps) {
     vehicleNumber: "",
     driverName: "",
     shippingAddress: "",
+    shipmentByName: "",
+    acknowledgedByName: "",
+    receivedByName: "",
     docStatus: "draft",
     notes: "",
   });
@@ -144,6 +147,9 @@ export function DeliveryForm({ deliveryId, companyId }: DeliveryFormProps) {
           vehicleNumber: data.vehicleNumber || "",
           driverName: data.driverName || "",
           shippingAddress: data.shippingAddress || "",
+          shipmentByName: data.shipmentByName || "",
+          acknowledgedByName: data.acknowledgedByName || "",
+          receivedByName: data.receivedByName || "",
           docStatus: data.status,
           notes: data.notes || "",
         });
@@ -240,6 +246,9 @@ export function DeliveryForm({ deliveryId, companyId }: DeliveryFormProps) {
           vehicleNumber: formData.vehicleNumber,
           driverName: formData.driverName,
           shippingAddress: formData.shippingAddress,
+          shipmentByName: formData.shipmentByName,
+          acknowledgedByName: formData.acknowledgedByName,
+          receivedByName: formData.receivedByName,
           status: formData.docStatus,
           notes: formData.notes,
           items: items.map((item, index) => ({
@@ -404,6 +413,37 @@ export function DeliveryForm({ deliveryId, companyId }: DeliveryFormProps) {
                     </select>
                   </div>
                 )}
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="shipmentByName">Bagian Pengiriman (signatory)</Label>
+                  <Input
+                    id="shipmentByName"
+                    name="shipmentByName"
+                    value={formData.shipmentByName}
+                    onChange={handleChange}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="acknowledgedByName">Mengetahui (signatory)</Label>
+                  <Input
+                    id="acknowledgedByName"
+                    name="acknowledgedByName"
+                    value={formData.acknowledgedByName}
+                    onChange={handleChange}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="receivedByName">Nama Penerima (once confirmed)</Label>
+                  <Input
+                    id="receivedByName"
+                    name="receivedByName"
+                    placeholder="Leave blank until receipt is confirmed"
+                    value={formData.receivedByName}
+                    onChange={handleChange}
+                  />
+                </div>
               </div>
 
               <div className="space-y-2">

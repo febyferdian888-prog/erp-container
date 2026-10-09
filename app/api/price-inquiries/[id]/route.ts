@@ -41,9 +41,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (!inquiry || inquiry.deletedAt) return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (!(await checkAccess(inquiry.companyId))) return NextResponse.json({ error: "No access" }, { status: 403 });
 
+    const soItemIds = inquiry.items.map((i) => i.soItemId).filter((v): v is string => !!v);
+    const soRows = soItemIds.length
+      ? await prisma.salesOrderItem.findMany({ where: { id: { in: soItemIds } }, select: { id: true, salesOrder: { select: { soNumber: true } } } })
+      : [];
+    const soNumberOf = new Map(soRows.map((r) => [r.id, r.salesOrder.soNumber]));
+
     return NextResponse.json({
       ...inquiry,
       items: inquiry.items.map((i) => ({
+        soNumber: i.soItemId ? soNumberOf.get(i.soItemId) ?? null : null,
         id: i.id, lineNumber: i.lineNumber, partNumber: i.partNumber, description: i.description, quantity: Number(i.quantity), unit: i.unit,
         awardedSupplierId: i.awardedSupplierId, poId: i.poId, poNumber: i.purchaseOrder?.poNumber ?? null,
         quotes: Object.fromEntries(i.quotes.map((q) => [q.supplierId, { unitPrice: Number(q.unitPrice), leadTimeDays: q.leadTimeDays, notes: q.notes }])),

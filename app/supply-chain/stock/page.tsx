@@ -55,7 +55,11 @@ export default function StockPage() {
       s.warehouse.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const lowStockCount = stocks.filter((s) => Number(s.quantity) <= Number(s.minimumStock)).length;
+  // A minimum of 0 means no reorder threshold has ever been set for that item —
+  // treating 0-on-hand/0-minimum as "low stock" flagged nearly every untouched
+  // item in the catalog as needing reorder (Tahap 6 audit). Only a genuine,
+  // explicitly-set minimum (> 0) that's been reached counts as low stock.
+  const lowStockCount = stocks.filter((s) => Number(s.minimumStock) > 0 && Number(s.quantity) <= Number(s.minimumStock)).length;
 
   if (status === "loading" || loading) {
     return (
@@ -147,7 +151,7 @@ export default function StockPage() {
                   {filtered.map((s) => {
                     const qty = Number(s.quantity);
                     const min = Number(s.minimumStock);
-                    const low = qty <= min;
+                    const low = min > 0 && qty <= min;
                     return (
                       <tr key={s.id} className="border-b border-slate-100 hover:bg-slate-50/60">
                         <td className="px-5 py-3 font-mono text-sm text-slate-700">{s.product.sku}</td>
@@ -160,10 +164,10 @@ export default function StockPage() {
                         <td className="px-5 py-3">
                           <span
                             className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
-                              low ? "bg-amber-100 text-amber-800" : "bg-green-100 text-green-800"
+                              low ? "bg-amber-100 text-amber-800" : min > 0 ? "bg-green-100 text-green-800" : "bg-slate-100 text-slate-500"
                             }`}
                           >
-                            {low ? "Low Stock" : "OK"}
+                            {low ? "Low Stock" : min > 0 ? "OK" : "No threshold set"}
                           </span>
                         </td>
                       </tr>

@@ -7,6 +7,7 @@ export type ReferenceType =
   | "Delivery"
   | "Invoice"
   | "Payment"
+  | "PaymentReport"
   | "PurchaseRequest"
   | "PurchaseOrder"
   | "GoodsReceipt"
@@ -25,6 +26,7 @@ export async function referenceCompanyId(db: Db, referenceType: string, referenc
     case "Delivery": return (await db.delivery.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;
     case "Invoice": return (await db.invoice.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;
     case "Payment": return (await db.payment.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;
+    case "PaymentReport": return (await db.paymentReport.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;
     case "PurchaseRequest": return (await db.purchaseRequest.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;
     case "PurchaseOrder": return (await db.purchaseOrder.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;
     case "GoodsReceipt": return (await db.goodsReceipt.findUnique({ where: { id: referenceId }, select: { companyId: true } }))?.companyId ?? null;

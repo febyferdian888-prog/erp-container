@@ -77,9 +77,15 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
   const [receiptNumber, setReceiptNumber] = useState("");
   const [poNumber, setPoNumber] = useState("");
   const [receiptWarehouseName, setReceiptWarehouseName] = useState("");
+  const [autoCreated, setAutoCreated] = useState(false);
+  const [stockApplied, setStockApplied] = useState(true);
+  const [editWarehouseId, setEditWarehouseId] = useState("");
   const [existingItems, setExistingItems] = useState<
-    { description: string; unit: string; quantity: number; condition: string; notes: string }[] | null
+    { id: string; description: string; unit: string; ordered: number; quantity: number; condition: string; notes: string }[] | null
   >(null);
+  const [inspectedByName, setInspectedByName] = useState<string | null>(null);
+  const [claim, setClaim] = useState<{ id: string; claimNumber: string; status: string; reason: string | null; resolutionNotes: string | null } | null>(null);
+  const [claimBusy, setClaimBusy] = useState(false);
 
   const [formData, setFormData] = useState({
     receiptDate: new Date().toISOString().split("T")[0],
@@ -101,11 +107,21 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
 
   const fetchPurchaseOrders = async () => {
     try {
-      const res = await fetch("/api/purchase-orders");
-      if (res.ok) {
-        const data = await res.json();
+      const [poRes, grRes] = await Promise.all([
+        fetch("/api/purchase-orders"),
+        fetch("/api/goods-receipts"),
+      ]);
+      if (poRes.ok) {
+        const pos = await poRes.json();
+        const grs = grRes.ok ? await grRes.json() : [];
+        const poIdsWithPendingDraft = new Set(
+          grs.filter((g: any) => g.autoCreated && !g.stockApplied).map((g: any) => g.purchaseOrder?.id ?? g.poId)
+        );
         setPurchaseOrders(
-          data.filter((po: any) => ["sent", "confirmed", "partial_received"].includes(po.status))
+          pos.filter(
+            (po: any) =>
+              ["sent", "confirmed", "partial_received"].includes(po.status) && !poIdsWithPendingDraft.has(po.id)
+          )
         );
       }
     } catch (err) {
@@ -130,6 +146,11 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
         setReceiptNumber(data.receiptNumber);
         setPoNumber(data.purchaseOrder?.poNumber || "");
         setReceiptWarehouseName(data.warehouse?.name || "");
+        setInspectedByName(data.inspectedByName || null);
+        setClaim(data.claims?.[0] || null);
+        setAutoCreated(!!data.autoCreated);
+        setStockApplied(data.stockApplied !== false);
+        setEditWarehouseId(data.warehouseId || "");
         setFormData({
           receiptDate: data.receiptDate.split("T")[0],
           qcStatus: data.status,
@@ -139,8 +160,10 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
           data.items.map((item: any) => {
             const poItem = data.purchaseOrder?.items?.find((pi: any) => pi.id === item.poItemId);
             return {
+              id: item.id,
               description: poItem?.description || "Item",
               unit: item.unit || "-",
+              ordered: poItem ? Number(poItem.quantity) : Number(item.quantity),
               quantity: Number(item.quantity),
               condition: item.condition,
               notes: item.notes || "",
@@ -190,6 +213,15 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
     setRows(newRows);
   };
 
+  const handleExistingItemChange = (index: number, field: string, value: any) => {
+    setExistingItems((prev) => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
@@ -202,10 +234,28 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
 
     try {
       if (grId) {
+        const editable = !stockApplied;
+        if (editable && !existingItems?.some((it) => it.quantity > 0)) {
+          throw new Error("Isi qty yang benar-benar diterima untuk minimal satu item");
+        }
         const res = await fetch(`/api/goods-receipts/${grId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: formData.qcStatus, notes: formData.notes }),
+          body: JSON.stringify({
+            status: formData.qcStatus,
+            notes: formData.notes,
+            ...(editable
+              ? {
+                  warehouseId: editWarehouseId || null,
+                  items: existingItems?.map((it) => ({
+                    id: it.id,
+                    quantity: it.quantity,
+                    condition: it.condition,
+                    notes: it.notes,
+                  })),
+                }
+              : {}),
+          }),
         });
         if (!res.ok) {
           const data = await res.json();
@@ -281,10 +331,86 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
 
             {grId ? (
               <>
-                <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 text-teal-800 text-sm">
-                  Received against Purchase Order {poNumber}
-                  {receiptWarehouseName && <> into <strong>{receiptWarehouseName}</strong></>}
+                <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 text-teal-800 text-sm flex items-center justify-between">
+                  <div>
+                    Received against Purchase Order {poNumber}
+                    {receiptWarehouseName && <> into <strong>{receiptWarehouseName}</strong></>}
+                    {inspectedByName && <div className="mt-1 text-xs text-teal-700">Diperiksa oleh (QC): <strong>{inspectedByName}</strong></div>}
+                  </div>
+                  <a
+                    href={`/api/goods-receipts/${grId}/pdf`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 border border-teal-300 bg-white px-3 py-1.5 rounded text-sm font-medium text-teal-800 hover:bg-teal-50"
+                  >
+                    Cetak PDF
+                  </a>
                 </div>
+
+                {autoCreated && !stockApplied && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-800 text-sm">
+                    <p className="font-semibold">Dibuat otomatis saat PO dikirim ke vendor</p>
+                    <p className="mt-1">
+                      Qty di bawah masih sesuai pesanan. Cek qty yang benar-benar diterima, sesuaikan kalau beda
+                      atau kurang, lalu ubah Inspection Status untuk konfirmasi — baru saat itu stok bertambah.
+                    </p>
+                  </div>
+                )}
+
+                {claim && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm">
+                    <p className="font-semibold text-red-800">
+                      Klaim Vendor {claim.claimNumber} — {claim.status.toUpperCase()}
+                    </p>
+                    <p className="text-red-700 mt-1">{claim.reason || "Item defect/partial ditemukan saat QC."}</p>
+                    {claim.status === "open" && (
+                      <div className="mt-3 flex gap-2">
+                        <Button
+                          type="button"
+                          disabled={claimBusy}
+                          onClick={async () => {
+                            setClaimBusy(true);
+                            try {
+                              const res = await fetch(`/api/supplier-claims/${claim.id}`, {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ status: "resolved", resolutionNotes: "Diselesaikan oleh vendor." }),
+                              });
+                              if (res.ok) setClaim(await res.json());
+                            } finally {
+                              setClaimBusy(false);
+                            }
+                          }}
+                        >
+                          Tandai Selesai
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={claimBusy}
+                          onClick={async () => {
+                            setClaimBusy(true);
+                            try {
+                              const res = await fetch(`/api/supplier-claims/${claim.id}`, {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ status: "rejected", resolutionNotes: "Klaim ditolak/dibatalkan." }),
+                              });
+                              if (res.ok) setClaim(await res.json());
+                            } finally {
+                              setClaimBusy(false);
+                            }
+                          }}
+                        >
+                          Batalkan
+                        </Button>
+                      </div>
+                    )}
+                    {claim.status !== "open" && claim.resolutionNotes && (
+                      <p className="text-xs text-red-600 mt-2">{claim.resolutionNotes}</p>
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -309,6 +435,25 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
                   </div>
                 </div>
 
+                {!stockApplied && (
+                  <div className="space-y-2">
+                    <Label htmlFor="editWarehouseId">Receiving Warehouse</Label>
+                    <select
+                      id="editWarehouseId"
+                      value={editWarehouseId}
+                      onChange={(e) => setEditWarehouseId(e.target.value)}
+                      className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white"
+                    >
+                      <option value="">Don't update stock</option>
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.code} — {w.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label htmlFor="notes">Notes</Label>
                   <textarea
@@ -326,6 +471,7 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
                     <thead>
                       <tr className="border-b border-slate-200 bg-slate-50">
                         <th className="text-left p-2">Item</th>
+                        {!stockApplied && <th className="text-right p-2 w-20">Ordered</th>}
                         <th className="text-right p-2 w-24">Qty Received</th>
                         <th className="text-center p-2 w-20">Unit</th>
                         <th className="text-center p-2 w-24">Condition</th>
@@ -333,15 +479,54 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {existingItems?.map((item, index) => (
-                        <tr key={index} className="border-b border-slate-200">
-                          <td className="p-2">{item.description}</td>
-                          <td className="p-2 text-right">{item.quantity}</td>
-                          <td className="p-2 text-center">{item.unit}</td>
-                          <td className="p-2 text-center capitalize">{item.condition}</td>
-                          <td className="p-2">{item.notes || "-"}</td>
-                        </tr>
-                      ))}
+                      {existingItems?.map((item, index) =>
+                        stockApplied ? (
+                          <tr key={item.id} className="border-b border-slate-200">
+                            <td className="p-2">{item.description}</td>
+                            <td className="p-2 text-right">{item.quantity}</td>
+                            <td className="p-2 text-center">{item.unit}</td>
+                            <td className="p-2 text-center capitalize">{item.condition}</td>
+                            <td className="p-2">{item.notes || "-"}</td>
+                          </tr>
+                        ) : (
+                          <tr key={item.id} className="border-b border-slate-200">
+                            <td className="p-2">{item.description}</td>
+                            <td className="p-2 text-right text-slate-500">{item.ordered}</td>
+                            <td className="p-2">
+                              <Input
+                                type="number"
+                                value={item.quantity}
+                                onChange={(e) => handleExistingItemChange(index, "quantity", parseFloat(e.target.value) || 0)}
+                                className="border-0 text-right"
+                                min="0"
+                                step="0.01"
+                              />
+                            </td>
+                            <td className="p-2 text-center">{item.unit}</td>
+                            <td className="p-2">
+                              <select
+                                value={item.condition}
+                                onChange={(e) => handleExistingItemChange(index, "condition", e.target.value)}
+                                className="w-full h-9 px-2 rounded border border-slate-200 bg-white text-sm"
+                              >
+                                {CONDITION_OPTIONS.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="p-2">
+                              <Input
+                                value={item.notes}
+                                onChange={(e) => handleExistingItemChange(index, "notes", e.target.value)}
+                                placeholder="-"
+                                className="border-0"
+                              />
+                            </td>
+                          </tr>
+                        )
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -370,7 +555,8 @@ export function GoodsReceiptForm({ grId, companyId }: GoodsReceiptFormProps) {
                       </select>
                       {purchaseOrders.length === 0 && (
                         <p className="text-xs text-slate-400">
-                          No purchase orders awaiting receipt. Set a PO's status to "Sent" or "Confirmed" first.
+                          Tidak ada PO yang perlu dibuatkan GR manual. PO berstatus "Sent"/"Confirmed" sudah
+                          otomatis dapat draft GR sendiri — cek daftar Goods Receipts.
                         </p>
                       )}
                     </div>

@@ -39,12 +39,31 @@ export async function GET(
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
+    // Two real sign-off tiers (Purchasing reviews, then Owner approves — see
+    // lib/approval.ts APPROVAL_TIERS), pulled in request order so each name
+    // lands under the right signature block instead of a fabricated one.
+    const approvalRows = await prisma.approval.findMany({
+      where: { referenceType: "PurchaseOrder", referenceId: id, status: "approved" },
+      orderBy: { createdAt: "asc" },
+    });
+    const reviewRow = approvalRows.find((a) => a.approverRole === "Purchasing");
+    const approveRow = approvalRows.find((a) => a.approverRole === "Owner");
+    const approverIds = [reviewRow?.approvedBy, approveRow?.approvedBy].filter((v): v is string => !!v);
+    const approvers = approverIds.length
+      ? await prisma.user.findMany({ where: { id: { in: approverIds } }, select: { id: true, name: true } })
+      : [];
+    const nameOf = (uid?: string | null) => approvers.find((u) => u.id === uid)?.name || null;
+
     const data: PoPdfData = {
       poNumber: po.poNumber,
+      revisionNumber: po.revisionNumber,
       poDate: po.poDate.toISOString(),
       deliveryDate: po.deliveryDate ? po.deliveryDate.toISOString() : null,
       paymentTerms: po.paymentTerms,
-      status: po.status,
+      currency: po.currency,
+      ppnPercent: Number(po.ppnPercent),
+      pphPercent: Number(po.pphPercent),
+      shipToAddress: po.shipToAddress,
       notes: po.notes,
       sourcePrNumber: po.purchaseRequest?.requestNumber || null,
       company: {
@@ -54,19 +73,20 @@ export async function GET(
         city: po.company.city,
         province: po.company.province,
         postalCode: po.company.postalCode,
-        phone: po.company.phone,
-        email: po.company.email,
-        npwp: po.company.npwp,
+        logo: po.company.logo,
       },
       supplier: {
         name: po.supplier.name,
         address: po.supplier.address,
         city: po.supplier.city,
-        phone: po.supplier.phone,
+        pic: po.supplier.picName,
       },
+      reviewedByName: nameOf(reviewRow?.approvedBy),
+      approvedByName: nameOf(approveRow?.approvedBy),
       items: po.items.map((item) => ({
         lineNumber: item.lineNumber,
         description: item.description,
+        brand: item.brand,
         quantity: Number(item.quantity),
         unit: item.unit,
         unitPrice: Number(item.unitPrice),

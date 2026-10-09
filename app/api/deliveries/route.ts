@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
-import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
+import { formatMdaDeliveryNumber, nextDeliverySequence } from "@/lib/document-number";
 import { applyDeliveryStock, recalcSalesOrderStatus } from "@/lib/workflow";
 import { guard } from "@/lib/rbac";
 
@@ -60,6 +60,9 @@ export async function POST(req: NextRequest) {
       vehicleNumber,
       driverName,
       shippingAddress,
+      shipmentByName,
+      acknowledgedByName,
+      receivedByName,
       notes,
       items,
     } = body;
@@ -72,11 +75,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
-    const { year, start, end } = currentYearRange();
-    const count = await prisma.delivery.count({
-      where: { companyId, createdAt: { gte: start, lt: end } },
-    });
-    const deliveryNumber = formatDocumentNumber("SJ", year, count + 1);
+    if (soId) {
+      const dup = await prisma.delivery.findFirst({
+        where: { soId, deletedAt: null, status: { not: "cancelled" } },
+        select: { deliveryNumber: true },
+      });
+      if (dup) {
+        return NextResponse.json({ error: `Sales order ini sudah punya surat jalan ${dup.deliveryNumber}. Batalkan atau hapus dulu bila ingin membuat ulang.` }, { status: 400 });
+      }
+    }
+
+    const delDate = new Date(deliveryDate);
+    const existingDeliveryNumbers = (
+      await prisma.delivery.findMany({ where: { companyId }, select: { deliveryNumber: true } })
+    ).map((d) => d.deliveryNumber);
+    const deliveryNumber = formatMdaDeliveryNumber(nextDeliverySequence(existingDeliveryNumbers, delDate), delDate);
 
     const delivery = await prisma.$transaction(async (tx) => {
       const created = await tx.delivery.create({
@@ -91,6 +104,9 @@ export async function POST(req: NextRequest) {
           vehicleNumber,
           driverName,
           shippingAddress,
+          shipmentByName,
+          acknowledgedByName,
+          receivedByName,
           notes,
           status: "draft",
           createdBy: session.user.email!,

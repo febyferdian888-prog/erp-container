@@ -22,6 +22,7 @@ interface Item {
   quotes: Record<string, Quote>;
   poId?: string | null;
   poNumber?: string | null;
+  soNumber?: string | null;
 }
 interface CreatedPo { id: string; poNumber: string; supplierName: string; total: number; lines: number }
 
@@ -86,7 +87,7 @@ export function PriceInquiryForm({ inquiryId, companyId }: { inquiryId?: string;
     });
     setVendorIds(d.vendors.map((v: { supplierId: string }) => v.supplierId));
     setItems(
-      d.items.map((i: { id: string; partNumber: string | null; description: string; quantity: number; unit: string | null; awardedSupplierId: string | null; poId: string | null; poNumber: string | null; quotes: Record<string, { unitPrice: number; leadTimeDays: number | null }> }) => ({
+      d.items.map((i: { soNumber?: string | null; id: string; partNumber: string | null; description: string; quantity: number; unit: string | null; awardedSupplierId: string | null; poId: string | null; poNumber: string | null; quotes: Record<string, { unitPrice: number; leadTimeDays: number | null }> }) => ({
         key: newKey(),
         id: i.id,
         partNumber: i.partNumber || "",
@@ -96,6 +97,7 @@ export function PriceInquiryForm({ inquiryId, companyId }: { inquiryId?: string;
         awarded: i.awardedSupplierId || "",
         poId: i.poId,
         poNumber: i.poNumber,
+        soNumber: i.soNumber ?? null,
         quotes: Object.fromEntries(Object.entries(i.quotes).map(([s, q]) => [s, { price: String(q.unitPrice), lead: q.leadTimeDays === null ? "" : String(q.leadTimeDays) }])),
       }))
     );
@@ -390,7 +392,7 @@ export function PriceInquiryForm({ inquiryId, companyId }: { inquiryId?: string;
                 return (
                   <tr key={i.key} className={`border-b border-slate-100 align-top ${locked ? "bg-slate-50" : ""}`}>
                     <td className="p-1.5"><input className={field} disabled={locked} value={i.partNumber} onChange={(e) => setItem(i.key, { partNumber: e.target.value })} onBlur={() => i.partNumber && refreshHistory(items)} /></td>
-                    <td className="p-1.5"><input className={field} disabled={locked} value={i.description} onChange={(e) => setItem(i.key, { description: e.target.value })} /></td>
+                    <td className="p-1.5"><input className={field} disabled={locked} value={i.description} onChange={(e) => setItem(i.key, { description: e.target.value })} />{i.soNumber && <span className="mt-0.5 block text-[11px] text-slate-400">Untuk {i.soNumber}</span>}</td>
                     <td className="p-1.5"><input className={`${field} text-right`} disabled={locked} inputMode="decimal" value={i.quantity} onChange={(e) => setItem(i.key, { quantity: e.target.value })} /></td>
                     <td className="p-1.5"><input className={field} disabled={locked} value={i.unit} onChange={(e) => setItem(i.key, { unit: e.target.value })} /></td>
                     {!isNew && vendors.map((v) => {

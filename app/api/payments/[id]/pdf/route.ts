@@ -20,7 +20,11 @@ export async function GET(
 
     const payment = await prisma.payment.findUnique({
       where: { id },
-      include: { company: true, customer: true },
+      include: {
+        company: true,
+        customer: true,
+        allocations: { include: { invoice: { select: { invoiceNumber: true } } } },
+      },
     });
 
     if (!payment) {
@@ -40,6 +44,7 @@ export async function GET(
       amount: Number(payment.amount),
       method: payment.method,
       description: payment.description,
+      invoiceReferences: payment.allocations.map((a) => a.invoice?.invoiceNumber).filter((n): n is string => !!n),
       company: {
         name: payment.company.name,
         description: payment.company.description,
@@ -50,8 +55,14 @@ export async function GET(
         phone: payment.company.phone,
         email: payment.company.email,
         npwp: payment.company.npwp,
+        bankName: payment.company.bankName,
+        bankAccount: payment.company.bankAccount,
+        logo: payment.company.logo,
+        signatoryName: payment.company.signatoryName,
+        signatoryTitle: payment.company.signatoryTitle,
       },
       customerName: payment.customer?.name || "-",
+      customerAddress: payment.customer?.address,
     };
 
     const buffer = await renderToBuffer(KwitansiPdfDocument({ data }));

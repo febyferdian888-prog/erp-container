@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Plus, Search, Eye, Trash2 } from "lucide-react";
+import { computeInvoiceMoney, PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/invoice-money";
 
 interface Invoice {
   id: string;
@@ -26,15 +27,22 @@ interface Invoice {
   status: string;
   grandTotal: number;
   paidAmount: number;
+  pphAmount: number;
 }
 
+// Document-level tone (draft/sent/cancelled); payment state below is always
+// derived live from the balance instead (Tahap 1 audit part A).
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-slate-100 text-slate-800",
   sent: "bg-blue-100 text-blue-800",
-  partial_paid: "bg-amber-100 text-amber-800",
-  paid: "bg-green-100 text-green-800",
-  overdue: "bg-red-100 text-red-800",
   cancelled: "bg-gray-100 text-gray-800",
+};
+
+const PAYMENT_COLORS: Record<PaymentState, string> = {
+  unpaid: "bg-slate-100 text-slate-800",
+  partial: "bg-amber-100 text-amber-800",
+  paid: "bg-green-100 text-green-800",
+  overpaid: "bg-blue-100 text-blue-800",
 };
 
 export default function InvoicesPage() {
@@ -151,13 +159,15 @@ export default function InvoicesPage() {
                       <TableHead>Date</TableHead>
                       <TableHead>Due</TableHead>
                       <TableHead className="text-right">Grand Total</TableHead>
-                      <TableHead className="text-right">Balance Due</TableHead>
+                      <TableHead className="text-right">Sisa Tagihan</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filtered.map((inv) => (
+                    {filtered.map((inv) => {
+                      const money = computeInvoiceMoney(inv);
+                      return (
                       <TableRow key={inv.id}>
                         <TableCell className="font-mono text-sm font-medium">{inv.invoiceNumber}</TableCell>
                         <TableCell>{inv.customer.name}</TableCell>
@@ -165,12 +175,26 @@ export default function InvoicesPage() {
                         <TableCell className="text-sm">{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("id-ID") : "-"}</TableCell>
                         <TableCell className="text-right font-semibold">{formatPrice(inv.grandTotal)}</TableCell>
                         <TableCell className="text-right font-semibold text-blue-700">
-                          {formatPrice(Number(inv.grandTotal) - Number(inv.paidAmount))}
+                          {money.paymentState === "overpaid" ? `+${formatPrice(money.overpaidAmount)}` : formatPrice(money.balanceDue)}
                         </TableCell>
                         <TableCell>
-                          <span className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide capitalize ${STATUS_COLORS[inv.status] || "bg-slate-100 text-slate-800"}`}>
-                            {inv.status.replace("_", " ")}
-                          </span>
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {["draft", "sent", "cancelled"].includes(inv.status) && (
+                              <span className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide capitalize ${STATUS_COLORS[inv.status] || "bg-slate-100 text-slate-800"}`}>
+                                {inv.status}
+                              </span>
+                            )}
+                            {!money.isCancelled && (
+                              <span className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${PAYMENT_COLORS[money.paymentState]}`}>
+                                {PAYMENT_STATE_LABEL[money.paymentState]}
+                              </span>
+                            )}
+                            {money.isOverdue && (
+                              <span className="px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide bg-red-100 text-red-800">
+                                Terlambat {money.daysOverdue}h
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right space-x-2">
                           <Button variant="ghost" size="sm" onClick={() => router.push(`/finance/invoices/${inv.id}`)}>
@@ -181,7 +205,8 @@ export default function InvoicesPage() {
                           </Button>
                         </TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

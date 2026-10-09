@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { ApprovalRequiredError, assertReleaseAllowed } from "@/lib/approval";
 import { guard } from "@/lib/rbac";
+import { renderToBuffer } from "@react-pdf/renderer";
+import { QuotationPdfDocument, QuotationPdfData } from "@/lib/quotation-pdf";
 
 export async function GET(
   req: NextRequest,
@@ -17,6 +19,15 @@ export async function GET(
       include: {
         customer: true,
         items: { orderBy: { lineNumber: "asc" } },
+        salesOrders: {
+          where: { deletedAt: null },
+          select: {
+            id: true, soNumber: true, poNumber: true, poDate: true, status: true,
+            items: { select: { quantity: true, unitPrice: true } },
+            invoices: { where: { deletedAt: null }, select: { invoiceNumber: true, status: true } },
+          },
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
 
@@ -90,11 +101,16 @@ export async function PUT(
       where: { id },
       data: {
         ...quotationData,
+        ...(quotationData.quotationDate ? { quotationDate: new Date(quotationData.quotationDate) } : {}),
+        ...(quotationData.expiryDate ? { expiryDate: new Date(quotationData.expiryDate) } : {}),
+        ...(quotationData.targetCloseDate ? { targetCloseDate: new Date(quotationData.targetCloseDate) } : {}),
+        ...(quotationData.nextFollowUpAt ? { nextFollowUpAt: new Date(quotationData.nextFollowUpAt) } : {}),
         items: {
           create: (items || []).map((item: any) => ({
             lineNumber: item.lineNumber,
             partNumber: item.partNumber,
             description: item.description,
+            specification: item.specification,
             quantity: item.quantity,
             unit: item.unit,
             unitPrice: item.unitPrice,
@@ -103,8 +119,64 @@ export async function PUT(
           })),
         },
       },
-      include: { customer: true, items: true },
+      include: { customer: true, items: true, company: true },
     });
+
+    // Archive an immutable PDF snapshot the moment a quotation is sent —
+    // this is the record of exactly what the customer received, since the
+    // live document can keep changing (revisions, later status transitions).
+    if (quotation.status !== "sent" && updated.status === "sent") {
+      const pdfData: QuotationPdfData = {
+        number: updated.number,
+        quotationDate: updated.quotationDate.toISOString(),
+        paymentTerms: updated.paymentTerms,
+        validityDays: updated.validityDays,
+        ppnPercent: Number(updated.ppnPercent),
+        pphPercent: Number(updated.pphPercent),
+        pic: updated.pic,
+        notes: updated.notes,
+        company: {
+          name: updated.company.name,
+          description: updated.company.description,
+          address: updated.company.address,
+          city: updated.company.city,
+          province: updated.company.province,
+          postalCode: updated.company.postalCode,
+          phone: updated.company.phone,
+          email: updated.company.email,
+          npwp: updated.company.npwp,
+          logo: updated.company.logo,
+          signatoryName: updated.company.signatoryName,
+          signatoryTitle: updated.company.signatoryTitle,
+        },
+        customer: { name: updated.customer.name, address: updated.customer.address, city: updated.customer.city },
+        items: updated.items.map((item) => ({
+          lineNumber: item.lineNumber,
+          partNumber: item.partNumber,
+          description: item.description,
+          specification: item.specification,
+          quantity: Number(item.quantity),
+          unit: item.unit,
+          unitPrice: Number(item.unitPrice),
+          subtotal: Number(item.subtotal),
+          notes: item.notes,
+        })),
+      };
+      const buffer = await renderToBuffer(QuotationPdfDocument({ data: pdfData }));
+      const fileName = `${updated.number}-terkirim.pdf`;
+      await prisma.attachment.create({
+        data: {
+          referenceType: "Quotation",
+          referenceId: id,
+          fileName,
+          fileSize: buffer.length,
+          fileType: "pdf",
+          mimeType: "application/pdf",
+          data: buffer,
+          uploadedBy: session.user.email,
+        },
+      });
+    }
 
     return NextResponse.json(updated);
   } catch (error) {

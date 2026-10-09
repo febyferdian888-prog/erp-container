@@ -9,7 +9,7 @@ import { assertReferenceAccess } from "@/lib/company-access";
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 const REFERENCE_TYPES = [
-  "RFQ", "Quotation", "SalesOrder", "Delivery", "Invoice", "Payment",
+  "RFQ", "Quotation", "SalesOrder", "Delivery", "Invoice", "Payment", "PaymentReport",
   "PurchaseRequest", "PurchaseOrder", "GoodsReceipt", "PriceInquiry", "Bill", "Project", "WorkOrder",
 ];
 
@@ -18,7 +18,7 @@ const ALLOWED_EXT = ["pdf", "png", "jpg", "jpeg", "webp", "doc", "docx", "xls", 
 
 const TYPE_AREA: Record<string, Area[]> = {
   RFQ: ["sales"], Quotation: ["sales"], SalesOrder: ["sales"], Delivery: ["sales"],
-  Invoice: ["finance"], Payment: ["finance"],
+  Invoice: ["finance"], Payment: ["finance"], PaymentReport: ["sales", "finance"],
   PurchaseRequest: ["purchasing"], PurchaseOrder: ["purchasing"], GoodsReceipt: ["purchasing"], PriceInquiry: ["purchasing"],
   Bill: ["finance", "purchasing"], Project: ["operational"], WorkOrder: ["operational"],
 };

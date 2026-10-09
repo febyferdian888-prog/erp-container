@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { normName } from "@/lib/name-utils";
+import { matchPart, type PartCandidate, type PartMatch } from "@/lib/part-match";
 
 export interface ImportRow {
   row: number;
@@ -16,6 +17,7 @@ export interface ImportRow {
   ppn: number | null;
   pph: number | null;
   dueDate: string | null;
+  soNumber?: string;
   soRef: string;
   paidDate: string | null;
   paidAmount: number | null;
@@ -26,6 +28,7 @@ export interface ImportOptions {
   defaultPpn: number;
   pricesIncludePpn: boolean;
   defaultDueDays: number;
+  applyPartSync?: boolean;
 }
 
 export interface PreviewItem {
@@ -39,6 +42,9 @@ export interface PreviewItem {
   soRef: string;
   soId: string | null;
   soNumber: string | null;
+  extraSoNumbers: string[];
+  originalPartNumber: string | null;
+  partMatch: PartMatch;
   notes: string;
 }
 
@@ -86,24 +92,32 @@ const addDays = (iso: string, n: number) => {
 };
 
 export async function analyzePurchaseImport(companyId: string, rows: ImportRow[], opt: ImportOptions) {
-  const [suppliers, salesOrders, existingBills] = await Promise.all([
+  const [suppliers, salesOrders, existingBills, products] = await Promise.all([
     prisma.supplier.findMany({ where: { companyId, deletedAt: null }, select: { id: true, name: true } }),
     prisma.salesOrder.findMany({
       where: { companyId, deletedAt: null },
-      select: { id: true, soNumber: true, poNumber: true },
+      select: { id: true, soNumber: true, poNumber: true, items: { select: { partNumber: true, description: true } } },
     }),
     prisma.bill.findMany({
       where: { companyId, deletedAt: null },
       select: { supplierId: true, vendorInvoiceNumber: true, billNumber: true, billDate: true, totalAmount: true },
     }),
+    prisma.product.findMany({ where: { companyId, deletedAt: null }, select: { sku: true, name: true } }),
   ]);
+  const applyPartSync = opt.applyPartSync !== false;
+  const masterCandidates: PartCandidate[] = products.map((p) => ({ partNumber: p.sku, source: "master", label: p.name }));
 
   const supplierByNorm = new Map(suppliers.map((s) => [normName(s.name), s]));
-  const soByRef = new Map<string, { id: string; soNumber: string }>();
+  type SoRec = (typeof salesOrders)[number];
+  const soByRef = new Map<string, SoRec>();
   for (const so of salesOrders) {
     soByRef.set(so.poNumber.trim().toLowerCase(), so);
     soByRef.set(so.soNumber.trim().toLowerCase(), so);
   }
+  // Several SOs/POs can share one cell, separated by / , ; or line breaks.
+  // SO numbers never contain a slash, but customer PO numbers do, so PO refs only split on " / ".
+  const splitSoRefs = (v: string) => v.split(/\s*[/,;&\n]\s*/).map((x) => x.trim()).filter(Boolean);
+  const splitPoRefs = (v: string) => v.split(/\s+\/\s+|\s*[,;&\n]\s*/).map((x) => x.trim()).filter(Boolean);
 
   // ---- vendors
   const vendorRows = new Map<string, { name: string; rows: number }>();
@@ -170,11 +184,40 @@ export async function analyzePurchaseImport(companyId: string, rows: ImportRow[]
         continue;
       }
       const price = r2(unitPrice! / divisor);
-      const so = g.soRef.trim() ? soByRef.get(g.soRef.trim().toLowerCase()) : undefined;
-      if (g.soRef.trim() && !so) warnings.push(`Baris ${g.row}: referensi "${g.soRef.trim()}" tidak cocok dengan Sales Order mana pun`);
+      // "No. Sales Order" wins; the customer PO column is the fallback.
+      const soNumberText = (g.soNumber || "").trim();
+      const refText = soNumberText || g.soRef.trim();
+      const refs = soNumberText ? splitSoRefs(soNumberText) : soByRef.has(refText.toLowerCase()) ? [refText] : splitPoRefs(refText);
+      const foundSos: SoRec[] = [];
+      for (const ref of refs) {
+        const hit = soByRef.get(ref.toLowerCase()) ?? (refs.length === 1 ? soByRef.get(refText.toLowerCase()) : undefined);
+        if (hit && !foundSos.includes(hit)) foundSos.push(hit);
+        else if (!hit) warnings.push(`Baris ${g.row}: referensi "${ref}" tidak cocok dengan Sales Order mana pun`);
+      }
+      const so = foundSos[0];
+      const extraSos = foundSos.slice(1).map((x) => x.soNumber);
+      if (extraSos.length) {
+        warnings.push(`Baris ${g.row}: dibeli untuk ${foundSos.length} SO (${foundSos.map((x) => x.soNumber).join(" / ")}); tercatat ke ${so.soNumber}, SO lain ditulis di catatan item`);
+      }
+
+      const soCandidates: PartCandidate[] = foundSos.flatMap((x) =>
+        x.items.filter((i) => (i.partNumber || "").trim()).map((i) => ({ partNumber: i.partNumber!, source: "so" as const, label: i.description }))
+      );
+      let partMatch = matchPart(g.partNumber, [...soCandidates, ...masterCandidates]);
+      // Historical records only: a close-but-not-exact part is taken as the same part
+      // (the nearest registered number wins). New sales entries stay strict.
+      if (applyPartSync && partMatch.status === "suggest") {
+        partMatch = { ...partMatch, status: "similar", canonical: partMatch.suggestions[0].partNumber, source: partMatch.suggestions[0].source };
+      }
+      const useCanonical = applyPartSync && partMatch.canonical && partMatch.canonical !== g.partNumber.trim();
+      const finalPart = useCanonical ? partMatch.canonical! : g.partNumber.trim();
+      if (useCanonical) warnings.push(`Baris ${g.row}: part "${g.partNumber.trim()}" disamakan dengan "${finalPart}" (${partMatch.source === "so" ? "sesuai invoice/SO" : "sesuai master sparepart"})`);
       items.push({
         row: g.row,
-        partNumber: g.partNumber.trim(),
+        partNumber: finalPart,
+        originalPartNumber: useCanonical ? g.partNumber.trim() : null,
+        partMatch,
+        extraSoNumbers: extraSos,
         description: g.description.trim() || g.partNumber.trim(),
         qty: g.qty!,
         unit: g.unit.trim() || "pcs",
@@ -183,7 +226,7 @@ export async function analyzePurchaseImport(companyId: string, rows: ImportRow[]
         soRef: g.soRef.trim(),
         soId: so?.id ?? null,
         soNumber: so?.soNumber ?? null,
-        notes: g.notes.trim(),
+        notes: [g.notes.trim(), extraSos.length ? `Juga untuk SO: ${extraSos.join(" / ")}` : "", useCanonical ? `Part rekap asli: ${g.partNumber.trim()}` : ""].filter(Boolean).join(" | "),
       });
     }
 
@@ -236,6 +279,10 @@ export async function analyzePurchaseImport(companyId: string, rows: ImportRow[]
       grandTotal: r2(ok.reduce((s, b) => s + b.grand, 0)),
       linkedItems,
       totalItems: bills.reduce((s, b) => s + b.items.length, 0),
+      partsAligned: bills.flatMap((b) => b.items).filter((i) => i.originalPartNumber).length,
+      partsSuggest: bills.flatMap((b) => b.items).filter((i) => i.partMatch.status === "suggest").length,
+      partsNew: bills.flatMap((b) => b.items).filter((i) => i.partMatch.status === "new").length,
+      multiSoItems: bills.flatMap((b) => b.items).filter((i) => i.extraSoNumbers.length).length,
     },
   };
 }

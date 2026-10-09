@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { companyId, sku, name, description, unitId, categoryId, standardPrice } = body;
+    const { companyId, sku, name, description, unitId, categoryId, standardPrice, itemType } = body;
 
     const existing = await prisma.product.findUnique({
       where: { companyId_sku: { companyId, sku } },
@@ -73,6 +73,7 @@ export async function POST(req: NextRequest) {
         unitId,
         categoryId,
         standardPrice: parseFloat(standardPrice) || 0,
+        itemType: itemType === "service" ? "service" : "goods",
         isActive: true,
       },
       include: { unit: true, category: true },

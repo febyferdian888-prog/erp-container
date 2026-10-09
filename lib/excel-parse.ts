@@ -2,7 +2,7 @@
 
 export type FieldKey =
   | "date" | "vendor" | "invoiceNo" | "partNumber" | "description" | "qty" | "unit" | "unitPrice"
-  | "amount" | "ppn" | "pph" | "dueDate" | "soRef" | "paidDate" | "paidAmount" | "notes";
+  | "amount" | "ppn" | "pph" | "dueDate" | "soNumber" | "soRef" | "paidDate" | "paidAmount" | "notes";
 
 export const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string; synonyms: string[] }[] = [
   { key: "date", label: "Tanggal", required: true, synonyms: ["tanggal invoice", "tgl invoice", "tanggal pembelian", "tanggal beli", "tanggal", "tgl", "date"] },
@@ -17,7 +17,8 @@ export const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: 
   { key: "ppn", label: "PPN (%)", synonyms: ["ppn %", "ppn (%)", "ppn"] },
   { key: "pph", label: "PPh 23 dipotong (Rp)", hint: "Nominal yang kita potong dari vendor, per bill", synonyms: ["pph 23", "pph23", "pph", "potongan pph"] },
   { key: "dueDate", label: "Jatuh tempo", synonyms: ["jatuh tempo", "due date", "tempo"] },
-  { key: "soRef", label: "Referensi penjualan", hint: "No. PO customer atau No. SO yang dipenuhi", synonyms: ["no po customer", "po customer", "nomor po customer", "customer po", "no so", "untuk so", "referensi", "po no", "no po", "so"] },
+  { key: "soNumber", label: "No. Sales Order", hint: "SO yang dipenuhi barang ini. Beberapa SO dipisah tanda /", synonyms: ["no. sales order", "no sales order", "nomor sales order", "sales order", "no. so", "no so", "nomor so", "untuk so"] },
+  { key: "soRef", label: "Referensi penjualan", hint: "No. PO customer (dipakai bila kolom No. Sales Order kosong)", synonyms: ["no po customer", "po customer", "nomor po customer", "customer po", "referensi", "po no", "no po"] },
   { key: "paidDate", label: "Tanggal bayar", synonyms: ["tanggal bayar", "tgl bayar", "paid date", "tanggal pembayaran", "tgl transfer", "tanggal transfer"] },
   { key: "paidAmount", label: "Jumlah dibayar", synonyms: ["jumlah dibayar", "jumlah bayar", "dibayar", "paid amount", "nominal bayar"] },
   { key: "notes", label: "Catatan", synonyms: ["catatan", "notes", "remark", "keterangan"] },
@@ -130,6 +131,7 @@ export interface ParsedRow {
   ppn: number | null;
   pph: number | null;
   dueDate: string | null;
+  soNumber: string;
   soRef: string;
   paidDate: string | null;
   paidAmount: number | null;
@@ -174,6 +176,7 @@ export function buildRows(data: unknown[][], headerRow: number, mapping: Mapping
       ppn,
       pph: parseNumber(get(r, "pph")),
       dueDate: parseDate(dueRaw),
+      soNumber: text(get(r, "soNumber")),
       soRef: text(get(r, "soRef")),
       paidDate: parseDate(get(r, "paidDate")),
       paidAmount: parseNumber(get(r, "paidAmount")),

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -168,9 +169,12 @@ export function RfqForm({ rfqId, companyId }: RfqFormProps) {
               </div>
             )}
 
-            {linkedQuotations.length > 0 && (
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-slate-700 text-sm">
-                Quoted via: {linkedQuotations.map((q) => q.number).join(", ")}
+            {rfqId && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-slate-700 text-sm flex items-center justify-between gap-3 flex-wrap">
+                <span>{linkedQuotations.length > 0 ? `Sudah ditawarkan via: ${linkedQuotations.map((q) => q.number).join(", ")}` : "Belum ada penawaran dari RFQ ini."}</span>
+                <Link href={`/sales/quotations/new?rfqId=${rfqId}`}>
+                  <Button type="button" size="sm" variant="outline">Buat penawaran dari RFQ ini</Button>
+                </Link>
               </div>
             )}
 

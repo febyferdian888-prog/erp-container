@@ -99,6 +99,8 @@ model Company {
   email             String?
   bankAccount       String? // Rekening bank
   bankName          String?
+  signatoryName     String? // name printed on the invoice signature block
+  signatoryTitle    String? // job title printed under the signatory name
   currency          String  @default("IDR")
   timezone          String  @default("Asia/Jakarta")
   isActive          Boolean @default(true)
@@ -123,6 +125,8 @@ model Company {
   bills             Bill[]
   payments          Payment[]
   goodsReceipts     GoodsReceipt[]
+  supplierClaims    SupplierClaim[]
+  paymentReports    PaymentReport[]
   workOrders        WorkOrder[]
   journalEntries    JournalEntry[]
   chartOfAccounts   ChartOfAccount[]
@@ -207,6 +211,7 @@ model Supplier {
   npwp          String? // Tax ID
   bankAccount   String?
   bankName      String?
+  picName       String? // vendor contact person, shown on the PO
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -222,6 +227,7 @@ model Supplier {
   payments      Payment[]
   inquiryVendors PriceInquiryVendor[]
   priceQuotes   PriceQuote[]
+  claims        SupplierClaim[]
 
   @@unique([companyId, code])
   @@index([companyId])
@@ -291,6 +297,10 @@ model Product {
   description   String?
   unitId        String
   standardPrice Decimal  @db.Decimal(19, 2) @default(0)
+  itemType      String   @default("goods") // goods, service — service items never carry physical stock or low-stock warnings (Tahap 6 audit)
+  brand         String?
+  classification String? // Genuine, Non Genuine, Registrasi Part/Jasa/Consumable/Matrial/Tools/Fabrikasi/Konveksi (Master Data MDA)
+  interchange   String? // alternate/superseded part number from the dealer
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -473,6 +483,16 @@ model Quotation {
   pphPercent      Decimal  @default(0) @db.Decimal(5, 2)
   status          String   @default("draft") // draft, sent, accepted, rejected, expired, cancelled
   notes           String?
+  // Sales pipeline tracking (Tahap 4A). Kept on Quotation rather than a
+  // separate CRM entity: a quotation already carries the estimated value, and
+  // adding a parallel "opportunity" record would be a second place for the
+  // same deal to go stale (see Tahap 1's stale-status lesson).
+  salesPic        String? // internal sales rep, distinct from `pic` (the customer's contact)
+  probability     Int?     @default(50) // 0-100, adjustable by the sales rep
+  targetCloseDate DateTime?
+  nextFollowUpAt  DateTime?
+  winLossReason   String?
+  estimatedMarginPercent Decimal? @db.Decimal(5, 2) // manual estimate; no cost basis exists yet at quotation stage
   createdBy       String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -499,6 +519,7 @@ model QuotationItem {
   lineNumber    Int
   partNumber    String?
   description   String
+  specification String? // multi-line spec text for fabrication-mode items (Barang/Jasa + Spesifikasi); spare-part items leave this null and use partNumber + description instead
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
   unitPrice     Decimal  @db.Decimal(19, 2)
@@ -539,6 +560,9 @@ model SalesOrder {
   soNumber      String   // Sales Order number (internal)
   projectId     String? @unique
   status        String   @default("draft") // draft, confirmed, partially_delivered, delivered, invoiced, cancelled
+  deliveryDebtAt DateTime? // sales acknowledged that part of the order is owed to the customer (e.g. stock short by a few pieces) while the rest is delivered and invoiced
+  deliveryDebtNote String?
+  procurementSkippedAt DateTime? // purchasing marked this order as fulfilled without buying (e.g. from stock)
   deliveryDate  DateTime?
   notes         String?
   createdBy     String?
@@ -556,6 +580,7 @@ model SalesOrder {
   deliveries    Delivery[]
   invoices      Invoice[]
   purchaseOrders PurchaseOrder[]
+  poSources     PurchaseOrderSource[]
   bills         Bill[]
   billItems     BillItem[]
   priceInquiries PriceInquiry[]
@@ -607,6 +632,15 @@ model Project {
   status            String   @default("planned") // planned, in_progress, on_hold, completed, cancelled
   responsible       String? // User ID
   notes             String?
+  // Estimate to complete (ETC): the one number in the profitability calc that
+  // cannot be derived from existing transactions, so it is a deliberate manual
+  // PIC input instead of being silently guessed (Tahap 3). Null means nobody
+  // has entered an estimate yet — the profitability view must say so plainly,
+  // not treat it as zero.
+  estimatedCostToComplete Decimal? @db.Decimal(19, 2)
+  estimatedCostNote       String?
+  estimatedCostUpdatedAt  DateTime?
+  estimatedCostUpdatedBy  String?
   createdBy         String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -624,11 +658,88 @@ model Project {
   purchaseOrders    PurchaseOrder[]
   timesheets        Timesheet[]
   reimbursements    Reimbursement[]
+  changeOrders      ChangeOrder[]
+  qualityChecks     QualityCheck[]
+  handoverDocuments HandoverDocument[]
 
   @@unique([companyId, projectNumber])
   @@index([companyId])
   @@index([customerId])
   @@map("projects")
+}
+
+// Approved work-scope changes (Tahap 3 gap). Only status="approved" rows feed
+// the profitability calc (lib/project-money.ts) — pending/rejected ones are
+// visible for tracking but never silently move the contract value or budget.
+model ChangeOrder {
+  id            String   @id @default(cuid())
+  projectId     String
+  changeNumber  String   // CO-001
+  title         String
+  description   String?
+  valueImpact   Decimal  @db.Decimal(19, 2) @default(0) // adjustment to contract value (can be negative)
+  budgetImpact  Decimal  @db.Decimal(19, 2) @default(0) // adjustment to project budget (can be negative)
+  status        String   @default("pending") // pending, approved, rejected
+  requestedBy   String?
+  approvedBy    String?
+  approvedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, changeNumber])
+  @@index([projectId])
+  @@map("change_orders")
+}
+
+// QC checkpoints (Tahap 3 gap). Deliberately simple pass/fail/rework log tied
+// to a project and optionally one of its milestones — not a full inspection
+// module, just enough to answer "was this checked, by whom, did it pass".
+model QualityCheck {
+  id            String   @id @default(cuid())
+  projectId     String
+  stageId       String?
+  checkNumber   String   // QC-001
+  title         String
+  result        String   @default("pending") // pending, passed, failed, rework
+  inspectedBy   String?
+  inspectedAt   DateTime?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stage         ProjectStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, checkNumber])
+  @@index([projectId])
+  @@map("quality_checks")
+}
+
+// BAST (Berita Acara Serah Terima) — the formal handover/acceptance document
+// (Tahap 3 gap). Can be partial (one milestone) or final.
+model HandoverDocument {
+  id              String   @id @default(cuid())
+  projectId       String
+  documentNumber  String   // BAST-001
+  handoverDate    DateTime
+  scope           String?  // what is being handed over: partial/final, description
+  customerSignee  String?
+  companySignee   String?
+  status          String   @default("draft") // draft, signed, cancelled
+  notes           String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  project         Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, documentNumber])
+  @@index([projectId])
+  @@map("handover_documents")
 }
 
 model ProjectStage {
@@ -645,6 +756,7 @@ model ProjectStage {
   updatedAt     DateTime @updatedAt
 
   project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  qualityChecks QualityCheck[]
 
   @@unique([projectId, stageNumber])
   @@index([projectId])
@@ -788,6 +900,12 @@ model PurchaseOrder {
   poDate        DateTime
   deliveryDate  DateTime?
   paymentTerms  String?
+  shipToAddress String? // defaults to the buyer company's own address when blank
+  revisionNumber Int     @default(1)
+  currency      String   @default("IDR")
+  ppnPercent    Decimal  @default(11) @db.Decimal(5, 2)
+  pphPercent    Decimal  @default(0) @db.Decimal(5, 2) // informational only — PPh withheld by MDA on a supplier invoice never reduces the PO total itself
+  dpPercent     Decimal  @default(0) @db.Decimal(5, 2) // down payment (uang muka) the vendor requires before processing, % of the PO value; 0 = none
   notes         String?
   status        String   @default("draft") // draft, sent, confirmed, partial_received, received, invoiced, cancelled
   createdBy     String?
@@ -802,6 +920,7 @@ model PurchaseOrder {
   salesOrder    SalesOrder? @relation(fields: [soId], references: [id], onDelete: SetNull)
 
   // Relations
+  sources       PurchaseOrderSource[]
   items         PurchaseOrderItem[]
   receipts      GoodsReceipt[]
   bills         Bill[]
@@ -818,8 +937,10 @@ model PurchaseOrderItem {
   id            String   @id @default(cuid())
   poId          String
   productId     String?
+  soItemId      String? // the sales-order line this PO line buys for; lets one SO be split across vendors and shows what is still unbought
   lineNumber    Int
   description   String
+  brand         String?
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
   unitPrice     Decimal  @db.Decimal(19, 2)
@@ -834,6 +955,7 @@ model PurchaseOrderItem {
 
   @@unique([poId, lineNumber])
   @@index([poId])
+  @@index([soItemId])
   @@map("purchase_order_items")
 }
 
@@ -846,6 +968,16 @@ model GoodsReceipt {
   receiptDate   DateTime
   status        String   @default("draft") // draft, received, inspected, accepted, rejected
   notes         String?
+  inspectedByName String? // QC inspector, set when status moves to inspected/accepted/rejected
+  inspectedAt   DateTime?
+  // True once this receipt's quantities have been posted to stock/PO receivedQty — happens
+  // once, the first time status moves off "draft". An auto-created receipt (see autoCreated)
+  // starts false so it can sit waiting for SCM to confirm real quantities without
+  // overstating stock before the goods have actually arrived.
+  stockApplied  Boolean  @default(true)
+  // True when this receipt was raised automatically because its PO was marked sent/confirmed
+  // to the vendor, rather than entered by hand by SCM (Tahap 9 workflow: PO -> expected GR).
+  autoCreated   Boolean  @default(false)
   createdBy     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -857,6 +989,7 @@ model GoodsReceipt {
 
   // Relations
   items         GoodsReceiptItem[]
+  claims        SupplierClaim[]
 
   @@unique([companyId, receiptNumber])
   @@index([companyId])
@@ -880,6 +1013,34 @@ model GoodsReceiptItem {
 
   @@index([grId])
   @@map("goods_receipt_items")
+}
+
+// Tracks vendor follow-up (return/claim) for goods received in defect or
+// partial condition — without this, a defective item was logged but nothing
+// downstream ensured the vendor actually resolved it.
+model SupplierClaim {
+  id            String   @id @default(cuid())
+  companyId     String
+  grId          String
+  supplierId    String
+  claimNumber   String
+  status        String   @default("open") // open, resolved, rejected
+  reason        String?
+  resolutionNotes String?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  resolvedAt    DateTime?
+  updatedAt     DateTime @updatedAt
+
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  goodsReceipt  GoodsReceipt @relation(fields: [grId], references: [id], onDelete: Cascade)
+  supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, claimNumber])
+  @@index([companyId])
+  @@index([grId])
+  @@index([supplierId])
+  @@map("supplier_claims")
 }
 
 // ============================================================================
@@ -906,6 +1067,7 @@ model Invoice {
   pphProofNumber String? // bukti potong received from the customer
   pphProofDate  DateTime?
   notes         String?
+  collectionsPic String? // email of the staff member assigned to collect this invoice (Tahap 2 AR workbench)
   createdBy     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -919,11 +1081,36 @@ model Invoice {
   items         InvoiceItem[]
   paymentAllocations PaymentAllocation[]
   deliveries    Delivery[]
+  followUps     InvoiceFollowUp[]
+  paymentReports PaymentReport[]
 
   @@unique([companyId, invoiceNumber])
   @@index([companyId])
   @@index([customerId])
   @@map("invoices")
+}
+
+// Collections activity log for the AR workbench (Tahap 2): a running history of
+// follow-ups, payment promises, and payment obstacles per invoice. Kept as one
+// append-only table instead of denormalized "last/next follow-up" columns on
+// Invoice, so there is nothing to fall out of sync (see Tahap 1: a stale
+// denormalized status field is exactly what caused that bug).
+model InvoiceFollowUp {
+  id            String   @id @default(cuid())
+  invoiceId     String
+  type          String   // follow_up, payment_promise, obstacle
+  note          String
+  promiseDate   DateTime?
+  promiseAmount Decimal? @db.Decimal(19, 2)
+  nextFollowUpAt DateTime?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+
+  invoice       Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([invoiceId, createdAt])
+  @@map("invoice_follow_ups")
 }
 
 model InvoiceItem {
@@ -969,6 +1156,7 @@ model Bill {
   pphProofNumber String? // bukti potong we issued
   pphProofDate  DateTime?
   pphRemittedAt DateTime? // date we paid the withheld tax to the tax office
+  billKind      String   @default("regular") // regular, down_payment (DP requested by purchasing from a PO)
   notes         String?
   createdBy     String?
   createdAt     DateTime @default(now())
@@ -995,6 +1183,7 @@ model BillItem {
   billId        String
   lineNumber    Int
   partNumber    String?
+  poItemId      String? // the PO line this bill line invoices; drives PO invoicedQty and the SCM "belum ada tagihan" list
   soId          String? // customer order this line was bought for (overrides the bill's soId)
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
@@ -1011,6 +1200,7 @@ model BillItem {
   @@unique([billId, lineNumber])
   @@index([soId])
   @@index([billId])
+  @@index([poItemId])
   @@map("bill_items")
 }
 
@@ -1275,6 +1465,11 @@ model AuditLog {
   newValue      String? // JSON
   description   String?
   ipAddress     String?
+  // Set when the write had no browser session to attribute it to (an import
+  // script, a batch backfill) but the row itself named who did it — e.g. its
+  // own createdBy email. Kept distinct from an anonymous "Sistem" entry, which
+  // has neither a userId nor an actorLabel (Tahap 8 audit).
+  actorLabel    String?
   createdAt     DateTime @default(now())
 
   user          User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1341,6 +1536,9 @@ model Delivery {
   vehicleNumber   String?
   driverName      String?
   shippingAddress String?
+  shipmentByName  String? // "Bagian Pengiriman" signatory, distinct from the driver
+  acknowledgedByName String? // "Mengetahui" signatory
+  receivedByName  String? // filled in once the customer confirms receipt; blank until then
   status          String   @default("draft") // draft, in_transit, delivered, accepted, cancelled
   notes           String?
   createdBy       String?
@@ -1432,6 +1630,7 @@ model PriceInquiryItem {
   inquiryId     String
   lineNumber    Int
   partNumber    String?
+  soItemId      String? // the sales-order line this request is for, carried onto the PO so coverage stays per line
   description   String
   quantity      Decimal  @db.Decimal(19, 4)
   unit          String?
@@ -1446,6 +1645,7 @@ model PriceInquiryItem {
 
   @@unique([inquiryId, lineNumber])
   @@index([inquiryId])
+  @@index([soItemId])
   @@map("price_inquiry_items")
 }
 
@@ -1464,4 +1664,47 @@ model PriceQuote {
 
   @@unique([itemId, supplierId])
   @@map("price_quotes")
+}
+
+// One vendor PO can consolidate items from several sales orders; PurchaseOrder.soId
+// keeps the first one for older code paths, this table holds the full set.
+model PurchaseOrderSource {
+  id            String   @id @default(cuid())
+  poId          String
+  soId          String
+  createdAt     DateTime @default(now())
+
+  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  salesOrder    SalesOrder    @relation(fields: [soId], references: [id], onDelete: Cascade)
+
+  @@unique([poId, soId])
+  @@index([soId])
+  @@map("purchase_order_sources")
+}
+
+// Sales reports "customer says they paid"; finance verifies the money landed
+// and approves, which is the only thing that records the Payment.
+model PaymentReport {
+  id            String   @id @default(cuid())
+  companyId     String
+  invoiceId     String
+  amount        Decimal  @db.Decimal(19, 2)
+  paidDate      DateTime
+  method        String   @default("transfer")
+  notes         String?
+  status        String   @default("pending") // pending, approved, rejected
+  reportedBy    String?
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  reviewNotes   String?
+  paymentId     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoice       Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([invoiceId])
+  @@map("payment_reports")
 }

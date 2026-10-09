@@ -34,6 +34,7 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
     npwp: "",
     bankAccount: "",
     bankName: "",
+    picName: "",
   });
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
         npwp: data.npwp || "",
         bankAccount: data.bankAccount || "",
         bankName: data.bankName || "",
+        picName: data.picName || "",
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error loading supplier");
@@ -180,6 +182,16 @@ export function SupplierForm({ supplierId, companyId }: SupplierFormProps) {
                     name="phone"
                     placeholder="+62-21-1234567"
                     value={formData.phone}
+                    onChange={handleChange}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="picName">PIC (Contact Person)</Label>
+                  <Input
+                    id="picName"
+                    name="picName"
+                    placeholder="Nama kontak vendor"
+                    value={formData.picName}
                     onChange={handleChange}
                   />
                 </div>

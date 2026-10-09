@@ -3,8 +3,11 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { recalcSalesOrderStatus } from "@/lib/workflow";
-import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
+import { formatMdaInvoiceNumber, nextInvoiceSequence } from "@/lib/document-number";
 import { guard } from "@/lib/rbac";
+import { dueDateFor } from "@/lib/payment-terms";
+import { renderInvoiceKwitansi } from "@/lib/invoice-kwitansi";
+import { findUnregisteredParts, unregisteredMessage } from "@/lib/part-registry";
 
 export async function GET(req: NextRequest) {
   try {
@@ -63,11 +66,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
-    const { year, start, end } = currentYearRange();
-    const count = await prisma.invoice.count({
-      where: { companyId, createdAt: { gte: start, lt: end } },
-    });
-    const invoiceNumber = formatDocumentNumber("INV", year, count + 1);
+    // Items copied from an existing sales order were already checked when it was created.
+    if (!soId) {
+      const missing = await findUnregisteredParts(prisma, companyId, items || []);
+      if (missing.length) {
+        return NextResponse.json({ error: unregisteredMessage(missing), code: "PART_NOT_REGISTERED", missing }, { status: 400 });
+      }
+    }
+
+    if (soId) {
+      const dup = await prisma.invoice.findFirst({
+        where: { soId, deletedAt: null, status: { not: "cancelled" } },
+        select: { invoiceNumber: true },
+      });
+      if (dup) {
+        return NextResponse.json({ error: `Sales order ini sudah punya invoice ${dup.invoiceNumber}. Batalkan atau hapus dulu bila ingin membuat ulang.` }, { status: 400 });
+      }
+    }
+
+    const termsDue = dueDateFor(String(invoiceDate || "").slice(0, 10), paymentTerms);
+
+    const invDate = new Date(invoiceDate);
+    const existingInvoiceNumbers = (
+      await prisma.invoice.findMany({ where: { companyId }, select: { invoiceNumber: true } })
+    ).map((i) => i.invoiceNumber);
+    const invoiceNumber = formatMdaInvoiceNumber(nextInvoiceSequence(existingInvoiceNumbers, invDate), invDate);
 
     const lineItems = (items || []).map((item: any) => ({
       lineNumber: item.lineNumber,
@@ -92,7 +115,7 @@ export async function POST(req: NextRequest) {
         soId: soId || null,
         invoiceNumber,
         invoiceDate: new Date(invoiceDate),
-        dueDate: dueDate ? new Date(dueDate) : null,
+        dueDate: termsDue ? new Date(termsDue) : dueDate ? new Date(dueDate) : null,
         paymentTerms,
         ppnPercent: ppn,
         totalAmount: subtotal,
@@ -111,6 +134,27 @@ export async function POST(req: NextRequest) {
     });
 
     await recalcSalesOrderStatus(prisma, invoice.soId);
+
+    // Kwitansi is part of the billing pack, so it is issued together with the invoice.
+    try {
+      const kw = await renderInvoiceKwitansi(prisma, invoice.id);
+      if (kw) {
+        await prisma.attachment.create({
+          data: {
+            referenceType: "Invoice",
+            referenceId: invoice.id,
+            fileName: `${kw.number}.pdf`,
+            fileSize: kw.buffer.length,
+            fileType: "pdf",
+            mimeType: "application/pdf",
+            data: kw.buffer,
+            uploadedBy: session.user.email,
+          },
+        });
+      }
+    } catch (e) {
+      console.error("Auto kwitansi failed for invoice", invoice.id, e);
+    }
 
     return NextResponse.json(invoice, { status: 201 });
   } catch (error) {

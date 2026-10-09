@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +48,13 @@ export function VendorPaymentForm({ paymentId, companyId }: VendorPaymentFormPro
     description: "",
     notes: "",
   });
+
+  const prefillBillId = useSearchParams().get("billId");
+
+  useEffect(() => {
+    if (paymentId || !prefillBillId || !bills.length || formData.referenceId) return;
+    handleBillPick(prefillBillId);
+  }, [bills]);
 
   useEffect(() => {
     if (status === "authenticated") {

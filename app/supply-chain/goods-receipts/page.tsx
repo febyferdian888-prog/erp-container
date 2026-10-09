@@ -22,6 +22,8 @@ interface GoodsReceipt {
   receiptNumber: string;
   receiptDate: string;
   status: string;
+  autoCreated: boolean;
+  stockApplied: boolean;
   purchaseOrder: { poNumber: string; supplier: { name: string } };
   items: { condition: string }[];
 }
@@ -68,8 +70,11 @@ export default function GoodsReceiptsPage() {
     }
   };
 
-  const handleDelete = async (id: string, number: string) => {
-    if (confirm(`Delete goods receipt "${number}"? This reverses the received quantity on its PO.`)) {
+  const handleDelete = async (id: string, number: string, stockApplied: boolean) => {
+    const warning = stockApplied
+      ? `Delete goods receipt "${number}"? This reverses the received quantity on its PO.`
+      : `Delete draft goods receipt "${number}"? It hasn't been confirmed yet, so no stock will change.`;
+    if (confirm(warning)) {
       try {
         const res = await fetch(`/api/goods-receipts/${id}`, { method: "DELETE" });
         if (!res.ok) throw new Error("Failed to delete");
@@ -173,13 +178,20 @@ export default function GoodsReceiptsPage() {
                         <TableCell className="font-medium">{r.purchaseOrder.supplier.name}</TableCell>
                         <TableCell className="text-sm text-slate-500">{r.items.length} line(s)</TableCell>
                         <TableCell>
-                          <span
-                            className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
-                              STATUS_STYLES[r.status] || "bg-slate-100 text-slate-800"
-                            }`}
-                          >
-                            {r.status}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
+                                STATUS_STYLES[r.status] || "bg-slate-100 text-slate-800"
+                              }`}
+                            >
+                              {r.status}
+                            </span>
+                            {r.autoCreated && !r.stockApplied && (
+                              <span className="px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide bg-amber-100 text-amber-800">
+                                Perlu dicek
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right space-x-2">
                           <Button
@@ -193,7 +205,7 @@ export default function GoodsReceiptsPage() {
                             variant="ghost"
                             size="sm"
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            onClick={() => handleDelete(r.id, r.receiptNumber)}
+                            onClick={() => handleDelete(r.id, r.receiptNumber, r.stockApplied)}
                           >
                             <Trash2 size={16} />
                           </Button>

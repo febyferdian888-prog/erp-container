@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { DashboardLayout } from "@/components/dashboard-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScmBoard } from "@/components/scm-board";
 import { ClipboardList, Truck, Users, Package, PackageCheck, Receipt, Landmark, Warehouse, Boxes, ChevronRight } from "lucide-react";
 
 const sections = [
@@ -80,6 +81,8 @@ export default function SupplyChainPage() {
           <h1 className="text-3xl font-bold text-slate-900">Supply Chain</h1>
           <p className="text-slate-600 mt-1">Choose a section to manage</p>
         </div>
+
+        <ScmBoard />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {sections.map((section) => (

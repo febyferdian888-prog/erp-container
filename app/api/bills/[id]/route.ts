@@ -129,7 +129,9 @@ export async function PUT(
       include: { items: true, supplier: true },
     });
 
-    if (!status || status === current.status) await recalcBillStatus(prisma, id);
+    // Always resync from post-edit totals (see the equivalent invoice-edit fix
+    // and Tahap 1 audit for why trusting a client-sent status here is unsafe).
+    await recalcBillStatus(prisma, id);
 
     return NextResponse.json(bill);
   } catch (error) {

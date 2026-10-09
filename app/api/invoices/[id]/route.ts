@@ -97,7 +97,12 @@ export async function PUT(
       include: { customer: true, items: true },
     });
 
-    if (!rest.status || rest.status === invoice.status) await recalcInvoiceStatus(prisma, id);
+    // Always resync status from the post-edit totals — grandTotal/paidAmount just
+    // changed above, so any client-sent `status` is stale and must not be trusted
+    // (see Tahap 1 audit: this guard used to skip recalc whenever the client's
+    // status differed from the pre-edit value, letting an item edit raise
+    // grandTotal without ever re-checking whether the invoice was still paid).
+    await recalcInvoiceStatus(prisma, id);
     await recalcSalesOrderStatus(prisma, updated.soId);
 
     return NextResponse.json(updated);

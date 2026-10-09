@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Plus, Trash2, Truck, Download } from "lucide-react";
 import { Attachments } from "@/components/attachments";
 import { ApprovalPanel } from "@/components/approval-panel";
+import { PoNextSteps } from "@/components/po-next-steps";
 
 interface Supplier {
   id: string;
@@ -29,7 +30,7 @@ interface SalesOrderOption {
   soNumber: string;
   poNumber: string;
   customer: { name: string };
-  items: { description: string; quantity: string; unit: string | null }[];
+  items: { partNumber?: string | null; description: string; quantity: string; unit: string | null }[];
 }
 
 interface LineItem {
@@ -37,11 +38,25 @@ interface LineItem {
   lineNumber: number;
   productId: string;
   description: string;
+  brand: string;
   quantity: number;
   unit: string;
   unitPrice: number;
   subtotal: number;
   notes: string;
+  partNumber?: string;
+  soItemId?: string;
+}
+
+interface HistoryItem {
+  productId: string | null;
+  description: string;
+  brand: string | null;
+  unit: string | null;
+  lastPrice: number;
+  supplierName: string;
+  poNumber: string;
+  poDate: string;
 }
 
 interface ProductOption {
@@ -50,6 +65,8 @@ interface ProductOption {
   name: string;
   standardPrice: number;
   unit: { code: string };
+  brand?: string | null;
+  interchange?: string | null;
 }
 
 interface PurchaseOrderFormProps {
@@ -69,6 +86,16 @@ const STATUS_OPTIONS = [
 
 export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const prefillSoIds = (searchParams.get("soIds") || searchParams.get("soId") || "").split(",").filter(Boolean);
+  const prefillItemIds = (searchParams.get("itemIds") || "").split(",").filter(Boolean);
+  const [mergedSoIds, setMergedSoIds] = useState<string[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [masterQuery, setMasterQuery] = useState("");
+  const [rowSearch, setRowSearch] = useState<number | null>(null);
+  const [rowQuery, setRowQuery] = useState("");
+  const [variantBusy, setVariantBusy] = useState<number | null>(null);
   const { status } = useSession();
   const [loading, setLoading] = useState(!!poId);
   const [submitting, setSubmitting] = useState(false);
@@ -78,12 +105,15 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
   const [approvedRequests, setApprovedRequests] = useState<PurchaseRequestOption[]>([]);
   const [salesOrders, setSalesOrders] = useState<SalesOrderOption[]>([]);
   const [poNumber, setPoNumber] = useState("");
+  const [revisionNumber, setRevisionNumber] = useState(1);
+  const [revising, setRevising] = useState(false);
   const [sourcePrNumber, setSourcePrNumber] = useState("");
   const [sourceSoNumber, setSourceSoNumber] = useState("");
+  const [coverageNote, setCoverageNote] = useState<{ covered: { description: string; poNumber: string; vendor: string }[]; outstanding: number; total: number } | null>(null);
   const [prId, setPrId] = useState("");
   const [soId, setSoId] = useState("");
   const [items, setItems] = useState<LineItem[]>([
-    { lineNumber: 1, productId: "", description: "", quantity: 0, unit: "pcs", unitPrice: 0, subtotal: 0, notes: "" },
+    { lineNumber: 1, productId: "", description: "", brand: "", quantity: 0, unit: "pcs", unitPrice: 0, subtotal: 0, notes: "" },
   ]);
 
   const [formData, setFormData] = useState({
@@ -91,6 +121,10 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
     poDate: new Date().toISOString().split("T")[0],
     deliveryDate: "",
     paymentTerms: "",
+    shipToAddress: "",
+    ppnPercent: 11,
+    pphPercent: 0,
+    dpPercent: 0,
     status: "draft",
     notes: "",
   });
@@ -101,6 +135,7 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
       fetchProducts();
       fetchApprovedRequests();
       fetchSalesOrders();
+      fetch("/api/purchase-orders/item-history").then((r) => (r.ok ? r.json() : [])).then(setHistory).catch(() => {});
       if (poId) {
         fetchPurchaseOrder();
       } else {
@@ -108,6 +143,68 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
       }
     }
   }, [status]);
+
+  useEffect(() => {
+    if (poId || !prefillSoIds.length) return;
+    const picked = salesOrders.filter((s) => prefillSoIds.includes(s.id));
+    if (!picked.length) return;
+    if (picked.length === 1) {
+      handleSoPick(picked[0].id);
+      return;
+    }
+    // Same item across several SOs becomes one line with the summed quantity (only what is still unbought).
+    (async () => {
+    const merged = new Map<string, LineItem>();
+    for (const so of picked) {
+      const cov = await fetch(`/api/sales-orders/${so.id}/coverage`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const lines: { partNumber?: string | null; description: string; quantity: number; unit: string | null }[] = cov
+        ? cov.items.filter((i: any) => i.outstandingQty > 0).map((i: any) => ({ partNumber: i.partNumber, description: i.description, quantity: i.outstandingQty, unit: i.unit }))
+        : so.items.map((i) => ({ partNumber: i.partNumber, description: i.description, quantity: Number(i.quantity), unit: i.unit }));
+      for (const item of lines) {
+        const key = `${item.description.trim().toLowerCase()}|${(item.unit || "pcs").toLowerCase()}`;
+        const existing = merged.get(key);
+        if (existing) {
+          existing.quantity += Number(item.quantity);
+        } else {
+          merged.set(key, {
+            lineNumber: merged.size + 1,
+            productId: "",
+            partNumber: item.partNumber || undefined,
+            description: item.description,
+            brand: "",
+            quantity: Number(item.quantity),
+            unit: item.unit || "pcs",
+            unitPrice: 0,
+            subtotal: 0,
+            notes: "",
+          });
+        }
+      }
+    }
+    setItems([...merged.values()]);
+    setSoId(picked[0].id);
+    setMergedSoIds(picked.map((s) => s.id));
+    setSourceSoNumber(picked.map((s) => s.soNumber).join(", "));
+    })();
+  }, [salesOrders]);
+
+  // SO lines already carry a registered part number; link them to the master automatically.
+  useEffect(() => {
+    if (!products.length) return;
+    const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const bySku = new Map(products.map((p) => [norm(p.sku), p]));
+    setItems((prev) => {
+      let changed = false;
+      const next = prev.map((it) => {
+        if (it.productId || !it.partNumber) return it;
+        const hit = bySku.get(norm(it.partNumber));
+        if (!hit) return it;
+        changed = true;
+        return { ...it, productId: hit.id, unit: it.unit || hit.unit?.code || "pcs", unitPrice: it.unitPrice || hit.standardPrice, subtotal: it.quantity * (it.unitPrice || hit.standardPrice) };
+      });
+      return changed ? next : prev;
+    });
+  }, [products, items.length]);
 
   const fetchSuppliers = async () => {
     try {
@@ -130,6 +227,8 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
             name: p.name,
             standardPrice: Number(p.standardPrice),
             unit: p.unit,
+            brand: p.brand ?? null,
+            interchange: p.interchange ?? null,
           }))
         );
       }
@@ -165,14 +264,23 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
       if (res.ok) {
         const data = await res.json();
         setPoNumber(data.poNumber);
+        setRevisionNumber(data.revisionNumber ?? 1);
         setSourcePrNumber(data.purchaseRequest?.requestNumber || "");
-        setSourceSoNumber(data.salesOrder?.soNumber || "");
+        setSourceSoNumber(
+          data.sources?.length
+            ? data.sources.map((s: any) => s.salesOrder.soNumber).join(", ")
+            : data.salesOrder?.soNumber || ""
+        );
         setSoId(data.soId || "");
         setFormData({
           supplierId: data.supplierId,
           poDate: data.poDate.split("T")[0],
           deliveryDate: data.deliveryDate ? data.deliveryDate.split("T")[0] : "",
           paymentTerms: data.paymentTerms || "",
+          shipToAddress: data.shipToAddress || "",
+          ppnPercent: Number(data.ppnPercent ?? 11),
+          pphPercent: Number(data.pphPercent ?? 0),
+          dpPercent: Number(data.dpPercent ?? 0),
           status: data.status,
           notes: data.notes || "",
         });
@@ -182,7 +290,9 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
               id: item.id,
               lineNumber: item.lineNumber,
               productId: item.productId || "",
+              soItemId: item.soItemId || undefined,
               description: item.description,
+              brand: item.brand || "",
               quantity: Number(item.quantity),
               unit: item.unit || "pcs",
               unitPrice: Number(item.unitPrice),
@@ -208,6 +318,7 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
           lineNumber: index + 1,
           productId: item.productId || "",
           description: item.description,
+          brand: "",
           quantity: Number(item.quantity),
           unit: item.unit || "pcs",
           unitPrice: Number(item.estimatedPrice),
@@ -218,15 +329,21 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
     }
   };
 
-  const handleSoPick = (id: string) => {
+  const handleSoPick = async (id: string) => {
     setSoId(id);
-    const so = salesOrders.find((s) => s.id === id);
-    if (so) {
+    setCoverageNote(null);
+    const so = salesOrders.find((x) => x.id === id);
+    if (!so) return;
+    setSourceSoNumber(so.soNumber);
+    const cov = await fetch(`/api/sales-orders/${id}/coverage`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (!cov) {
       setItems(
         so.items.map((item: any, index) => ({
           lineNumber: index + 1,
           productId: "",
+          partNumber: item.partNumber || undefined,
           description: item.description,
+          brand: "",
           quantity: Number(item.quantity),
           unit: item.unit || "pcs",
           unitPrice: 0,
@@ -234,12 +351,35 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
           notes: "",
         }))
       );
+      return;
     }
+    const outstanding = cov.items.filter((i: any) => i.outstandingQty > 0 && (!prefillItemIds.length || prefillItemIds.includes(i.id)));
+    const covered = cov.items
+      .filter((i: any) => i.outstandingQty <= 0)
+      .flatMap((i: any) => i.orders.map((o: any) => ({ description: i.description, poNumber: o.poNumber, vendor: o.supplierName })));
+    setCoverageNote({ covered, outstanding: outstanding.length, total: cov.items.length });
+    if (!outstanding.length) return;
+    setItems(
+      outstanding.map((i: any, index: number) => ({
+        lineNumber: index + 1,
+        productId: "",
+        soItemId: i.id,
+        partNumber: i.partNumber || undefined,
+        description: i.description,
+        brand: "",
+        quantity: Number(i.outstandingQty),
+        unit: i.unit || "pcs",
+        unitPrice: 0,
+        subtotal: 0,
+        notes: "",
+      }))
+    );
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    const numericFields = ["ppnPercent", "pphPercent", "dpPercent"];
+    setFormData((prev) => ({ ...prev, [name]: numericFields.includes(name) ? parseFloat(value) || 0 : value }));
   };
 
   const handleItemChange = (index: number, field: string, value: any) => {
@@ -259,11 +399,124 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
     setItems(newItems);
   };
 
+  const blankLine = (n: number): LineItem => ({
+    lineNumber: n, productId: "", description: "", brand: "", quantity: 0, unit: "pcs", unitPrice: 0, subtotal: 0, notes: "",
+  });
+
+  const addFromHistory = (h: HistoryItem) => {
+    const filled = {
+      productId: h.productId || "",
+      description: h.description,
+      brand: h.brand || "",
+      unit: h.unit || "pcs",
+      unitPrice: h.lastPrice,
+    };
+    const emptyIdx = items.findIndex((i) => !i.description.trim());
+    if (emptyIdx >= 0) {
+      setItems(items.map((it, i) => (i === emptyIdx ? { ...it, ...filled, subtotal: it.quantity * filled.unitPrice } : it)));
+    } else {
+      const n = Math.max(...items.map((i) => i.lineNumber), 0) + 1;
+      setItems([...items, { ...blankLine(n), ...filled, quantity: 1, subtotal: filled.unitPrice }]);
+    }
+  };
+
+  const handleDescriptionChange = (index: number, value: string) => {
+    const match = history.find((h) => h.description === value);
+    const item = items[index];
+    if (match && !item.brand && !item.unitPrice) {
+      setItems(items.map((it, i) => (i === index
+        ? { ...it, description: value, brand: match.brand || "", unit: match.unit || it.unit, unitPrice: match.lastPrice, subtotal: it.quantity * match.lastPrice }
+        : it)));
+    } else {
+      handleItemChange(index, "description", value);
+    }
+  };
+
+  const addFromMaster = (p: ProductOption) => {
+    const filled = { productId: p.id, brand: p.brand || "", description: p.name, unit: p.unit?.code || "pcs", unitPrice: p.standardPrice };
+    const emptyIdx = items.findIndex((i) => !i.description.trim() && !i.productId);
+    if (emptyIdx >= 0) {
+      setItems(items.map((it, i) => (i === emptyIdx ? { ...it, ...filled, quantity: it.quantity || 1, subtotal: (it.quantity || 1) * filled.unitPrice } : it)));
+    } else {
+      const n = Math.max(...items.map((i) => i.lineNumber), 0) + 1;
+      setItems([...items, { ...blankLine(n), ...filled, quantity: 1, subtotal: filled.unitPrice }]);
+    }
+    setMasterQuery("");
+  };
+
+  const saveAsNewPrice = async (index: number) => {
+    const item = items[index];
+    if (!item.productId) return;
+    setVariantBusy(index);
+    setError(null);
+    try {
+      const res = await fetch(`/api/products/${item.productId}/price-variant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price: item.unitPrice }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Gagal menyimpan kode harga baru");
+      const np = data.product;
+      setProducts((prev) => (prev.some((pr) => pr.id === np.id) ? prev : [...prev, { id: np.id, sku: np.sku, name: np.name, standardPrice: Number(np.standardPrice), unit: np.unit, brand: np.brand ?? null, interchange: np.interchange ?? null }]));
+      setItems((prev) => prev.map((it, i) => (i === index ? { ...it, productId: np.id } : it)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan kode harga baru");
+    } finally {
+      setVariantBusy(null);
+    }
+  };
+
+  const rowMasterMatches = rowSearch === null || !rowQuery.trim()
+    ? []
+    : products.filter((pr) => {
+        const q = rowQuery.trim().toLowerCase();
+        return [pr.sku, pr.name, pr.brand, pr.interchange].some((v) => (v || "").toLowerCase().includes(q));
+      }).slice(0, 12);
+
+  const rowHistory = rowSearch === null || !rowQuery.trim()
+    ? []
+    : history
+        .filter((h) => {
+          const q = rowQuery.trim().toLowerCase();
+          const pr = products.find((x) => x.id === h.productId);
+          return [h.description, h.brand, h.supplierName, h.poNumber, pr?.sku].some((v) => (v || "").toLowerCase().includes(q));
+        })
+        .sort((a, b) => new Date(b.poDate).getTime() - new Date(a.poDate).getTime())
+        .slice(0, 10);
+
+  const pickForRow = (index: number, pr: ProductOption, price?: number) => {
+    setItems((prev) => prev.map((it, i) => {
+      if (i !== index) return it;
+      const unitPrice = price ?? pr.standardPrice;
+      return { ...it, productId: pr.id, description: pr.name, unit: pr.unit?.code || it.unit, unitPrice, subtotal: it.quantity * unitPrice };
+    }));
+    setRowSearch(null);
+  };
+
+  const masterMatches = masterQuery.trim()
+    ? products
+        .filter((p) => {
+          const q = masterQuery.trim().toLowerCase();
+          return [p.sku, p.name, p.brand, p.interchange].some((v) => (v || "").toLowerCase().includes(q));
+        })
+        .slice(0, 10)
+    : [];
+
+  const historyMatches = historyQuery.trim()
+    ? history
+        .filter((h) => {
+          const q = historyQuery.trim().toLowerCase();
+          return [h.description, h.brand, h.supplierName, h.poNumber].some((v) => (v || "").toLowerCase().includes(q));
+        })
+        .slice(0, 8)
+    : [];
+
   const addItem = () => {
     const newLineNumber = Math.max(...items.map((i) => i.lineNumber), 0) + 1;
     setItems([
       ...items,
-      { lineNumber: newLineNumber, productId: "", description: "", quantity: 0, unit: "pcs", unitPrice: 0, subtotal: 0, notes: "" },
+      { lineNumber: newLineNumber, productId: "", description: "", brand: "", quantity: 0, unit: "pcs", unitPrice: 0, subtotal: 0, notes: "" },
     ]);
   };
 
@@ -287,6 +540,12 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
       if (!items.length || !items[0].description) {
         throw new Error("At least one line item is required");
       }
+      const unregistered = items.map((it, i) => ({ it, line: i + 1 })).filter(({ it }) => !it.productId);
+      if (unregistered.length) {
+        throw new Error(
+          `Item baris ${unregistered.map((u) => u.line).join(", ")} belum terhubung ke master sparepart. Cari di Master Sparepart, atau daftarkan dulu sebagai item baru.`
+        );
+      }
 
       const url = poId ? `/api/purchase-orders/${poId}` : "/api/purchase-orders";
       const method = poId ? "PUT" : "POST";
@@ -299,9 +558,12 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
           ...formData,
           prId: prId || null,
           soId: soId || null,
+          soIds: mergedSoIds.length ? mergedSoIds : undefined,
           items: items.map((item) => ({
             productId: item.productId || null,
+            soItemId: item.soItemId || null,
             description: item.description,
+            brand: item.brand || null,
             quantity: item.quantity,
             unit: item.unit,
             unitPrice: item.unitPrice,
@@ -329,6 +591,7 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
 
   return (
     <div className="max-w-5xl">
+      {poId && <PoNextSteps poId={poId} />}
       {poId && <ApprovalPanel referenceType="PurchaseOrder" referenceId={poId} />}
       <div className="flex items-center justify-between mb-6">
         <button
@@ -339,12 +602,41 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
           Back to Purchase Orders
         </button>
         {poId && (
-          <a href={`/api/purchase-orders/${poId}/pdf`} target="_blank" rel="noopener noreferrer">
-            <Button type="button" variant="outline" className="gap-2">
-              <Download size={16} />
-              Download PDF
+          <div className="flex items-center gap-2">
+            {revisionNumber > 1 && (
+              <span className="text-xs font-medium text-orange-700 bg-orange-50 px-2 py-1 rounded">Rev. {revisionNumber}</span>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={revising}
+              onClick={async () => {
+                if (!window.confirm(`Naikkan PO ini ke Rev. ${revisionNumber + 1}? Item dan harga tetap seperti yang tersimpan sekarang — edit dulu sebelum menaikkan revisi jika ada perubahan.`)) return;
+                setRevising(true);
+                try {
+                  const res = await fetch(`/api/purchase-orders/${poId}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ revisionNumber: revisionNumber + 1 }),
+                  });
+                  if (!res.ok) throw new Error((await res.json()).error || "Gagal membuat revisi");
+                  setRevisionNumber(revisionNumber + 1);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Gagal membuat revisi");
+                } finally {
+                  setRevising(false);
+                }
+              }}
+            >
+              {revising ? "Menyimpan..." : "Buat Revisi Baru"}
             </Button>
-          </a>
+            <a href={`/api/purchase-orders/${poId}/pdf`} target="_blank" rel="noopener noreferrer">
+              <Button type="button" variant="outline" className="gap-2">
+                <Download size={16} />
+                Download PDF
+              </Button>
+            </a>
+          </div>
         )}
       </div>
 
@@ -370,6 +662,28 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
             {sourceSoNumber && (
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 text-orange-800 text-sm">
                 Procuring for Sales Order {sourceSoNumber}
+                {mergedSoIds.length > 1 && (
+                  <p className="mt-1 text-xs">
+                    PO gabungan dari {mergedSoIds.length} SO. Item yang sama sudah dijumlahkan; periksa qty sebelum disimpan.
+                  </p>
+                )}
+                {coverageNote && coverageNote.total > 0 && (
+                  <div className="mt-2 text-xs">
+                    <p>
+                      {coverageNote.outstanding} dari {coverageNote.total} item SO ini belum di-PO. Hapus baris yang akan dipesan ke vendor lain;
+                      baris yang tidak masuk PO ini tetap menunggu di daftar tugas Purchasing.
+                    </p>
+                    {coverageNote.covered.length > 0 && (
+                      <ul className="mt-1 list-disc pl-4">
+                        {coverageNote.covered.map((c, i) => (
+                          <li key={i}>
+                            {c.description} sudah di {c.poNumber} ({c.vendor})
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -479,6 +793,35 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
                 )}
               </div>
 
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="ppnPercent">PPN (%)</Label>
+                  <Input id="ppnPercent" name="ppnPercent" type="number" step="0.01" min="0" value={formData.ppnPercent} onChange={handleChange} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pphPercent">PPh (%) — informasional</Label>
+                  <Input id="pphPercent" name="pphPercent" type="number" step="0.01" min="0" value={formData.pphPercent} onChange={handleChange} />
+                  <p className="text-xs text-slate-400">Dipotong vendor saat penagihan, tidak mengurangi Total PO.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dpPercent">Uang muka / DP (%)</Label>
+                  <Input id="dpPercent" name="dpPercent" type="number" step="0.01" min="0" max="100" value={formData.dpPercent} onChange={handleChange} />
+                  <p className="text-xs text-slate-400">Isi bila vendor minta DP sebelum memproses. 0 = tanpa DP.</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="shipToAddress">Ship To Address (optional — defaults to company address)</Label>
+                <textarea
+                  id="shipToAddress"
+                  name="shipToAddress"
+                  value={formData.shipToAddress}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  rows={2}
+                />
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="notes">Notes / Special Instructions</Label>
                 <textarea
@@ -501,12 +844,84 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
                 </Button>
               </div>
 
+              <datalist id="po-item-history">
+                {history.slice(0, 500).map((h, i) => (
+                  <option key={i} value={h.description} />
+                ))}
+              </datalist>
+
+              <div className="space-y-1">
+                <Input
+                  value={masterQuery}
+                  onChange={(e) => setMasterQuery(e.target.value)}
+                  placeholder="Cari di Master Sparepart (part number atau nama)…"
+                />
+                {masterQuery.trim() && (
+                  <ul className="max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 bg-white text-sm">
+                    {masterMatches.length === 0 && (
+                      <li className="flex items-center justify-between gap-3 px-3 py-2 text-slate-600">
+                        <span>Tidak ada di master sparepart. Daftarkan dulu sebagai item baru, lalu cari lagi di sini.</span>
+                        <a
+                          href={`/operational/products/new?sku=${encodeURIComponent(masterQuery.trim())}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="shrink-0 border border-slate-300 bg-white px-3 py-1 text-sm font-medium hover:bg-slate-50"
+                        >
+                          Tambah ke master
+                        </a>
+                      </li>
+                    )}
+                    {masterMatches.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{p.name}</span>
+                          <span className="block font-mono text-xs text-slate-500">{p.sku}{p.brand ? ` · ${p.brand}` : ""}{p.interchange ? ` · alt: ${p.interchange}` : ""} · {formatPrice(p.standardPrice)}</span>
+                        </span>
+                        <Button type="button" variant="outline" size="sm" onClick={() => addFromMaster(p)}>
+                          Tambah
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button type="button" className="text-xs text-slate-500 underline" onClick={fetchProducts}>
+                  Muat ulang master sparepart (setelah menambah item baru)
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                <Input
+                  value={historyQuery}
+                  onChange={(e) => setHistoryQuery(e.target.value)}
+                  placeholder="Cari item yang pernah dipesan (nama, brand, vendor, no. PO)…"
+                />
+                {historyQuery.trim() && (
+                  <ul className="max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 bg-white text-sm">
+                    {historyMatches.length === 0 && <li className="px-3 py-2 text-slate-500">Tidak ada item cocok.</li>}
+                    {historyMatches.map((h, i) => (
+                      <li key={i} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{h.description + (h.brand ? " · " + h.brand : "")}</span>
+                          <span className="block text-xs text-slate-500">
+                            {formatPrice(h.lastPrice) + " / " + (h.unit || "pcs") + " · " + h.supplierName + " · " + h.poNumber + " · " + new Date(h.poDate).toLocaleDateString("id-ID")}
+                          </span>
+                        </span>
+                        <Button type="button" variant="outline" size="sm" onClick={() => addFromHistory(h)}>
+                          Tambah
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[1100px] text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50">
-                      <th className="text-left p-2 w-44">Sparepart (optional)</th>
-                      <th className="text-left p-2">Description</th>
+                      <th className="text-left p-2 w-44">Sparepart (master)</th>
+                      <th className="text-left p-2 min-w-[300px]">Description</th>
+                      <th className="text-left p-2 w-28">Brand</th>
                       <th className="text-right p-2 w-24">Qty</th>
                       <th className="text-center p-2 w-20">Unit</th>
                       <th className="text-right p-2 w-32">Unit Price</th>
@@ -524,21 +939,44 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
                             onChange={(e) => handleItemChange(index, "productId", e.target.value)}
                             className="w-full h-9 px-2 rounded border-0 bg-transparent text-sm"
                           >
-                            <option value="">Manual entry</option>
+                            <option value="">Pilih dari master…</option>
                             {products.map((p) => (
                               <option key={p.id} value={p.id}>
-                                {p.sku}
+                                {p.sku} — {p.name}
                               </option>
                             ))}
                           </select>
+                          <div className="mt-0.5 flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="text-[11px] font-medium text-brand underline"
+                              onClick={() => {
+                                const cur = products.find((pr) => pr.id === item.productId);
+                                setRowQuery(cur?.sku.replace(/-\d+$/, "") || item.description);
+                                setRowSearch(index);
+                              }}
+                            >
+                              Cari / cek harga
+                            </button>
+                            {!item.productId && <span className="text-[10px] text-amber-700">Belum di master — wajib dipilih</span>}
+                          </div>
                         </td>
                         <td className="p-2">
                           <Input
                             value={item.description}
-                            onChange={(e) => handleItemChange(index, "description", e.target.value)}
-                            placeholder="Item description"
-                            className="border-0"
+                            onChange={(e) => handleDescriptionChange(index, e.target.value)}
+                            list="po-item-history"
+                            placeholder="Ketik deskripsi item, atau pilih dari riwayat"
+                            className="border border-slate-200"
                             required
+                          />
+                        </td>
+                        <td className="p-2">
+                          <Input
+                            value={item.brand}
+                            onChange={(e) => handleItemChange(index, "brand", e.target.value)}
+                            placeholder="-"
+                            className="border border-slate-200"
                           />
                         </td>
                         <td className="p-2">
@@ -568,6 +1006,18 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
                             min="0"
                             step="0.01"
                           />
+                          {(() => {
+                            const linked = products.find((pr) => pr.id === item.productId);
+                            if (!linked || !item.unitPrice || item.unitPrice === linked.standardPrice) return null;
+                            return (
+                              <div className="mt-0.5 text-[10px] leading-tight text-amber-700">
+                                Beda dari harga {linked.sku} ({formatPrice(linked.standardPrice)}).{" "}
+                                <button type="button" disabled={variantBusy === index} className="underline" onClick={() => saveAsNewPrice(index)}>
+                                  {variantBusy === index ? "Menyimpan…" : "Simpan sebagai kode baru"}
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="p-2 text-right font-semibold">{formatPrice(item.subtotal)}</td>
                         <td className="p-2">
@@ -596,6 +1046,57 @@ export function PurchaseOrderForm({ poId, companyId }: PurchaseOrderFormProps) {
                   </tbody>
                 </table>
               </div>
+
+              {rowSearch !== null && (
+                <div className="space-y-3 border border-slate-300 bg-white p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-slate-900">Cari sparepart untuk baris {rowSearch + 1}</p>
+                    <button type="button" className="text-sm text-slate-500 hover:text-slate-900" onClick={() => setRowSearch(null)}>Tutup</button>
+                  </div>
+                  <Input autoFocus value={rowQuery} onChange={(e) => setRowQuery(e.target.value)} placeholder="Part number, nama, vendor, atau no. PO…" />
+
+                  <div>
+                    <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">Master sparepart (kode &amp; harga standar)</p>
+                    <ul className="divide-y divide-slate-100 border border-slate-200 text-sm">
+                      {rowMasterMatches.length === 0 && <li className="px-3 py-2 text-slate-500">Tidak ada di master.</li>}
+                      {rowMasterMatches.map((pr) => (
+                        <li key={pr.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium">{pr.name}</span>
+                            <span className="block font-mono text-xs text-slate-500">{pr.sku}{pr.brand ? ` · ${pr.brand}` : ""}{pr.interchange ? ` · alt: ${pr.interchange}` : ""} · {formatPrice(pr.standardPrice)}</span>
+                          </span>
+                          <Button type="button" variant="outline" size="sm" onClick={() => pickForRow(rowSearch, pr)}>Pakai</Button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div>
+                    <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">Pembelian sebelumnya</p>
+                    <ul className="divide-y divide-slate-100 border border-slate-200 text-sm">
+                      {rowHistory.length === 0 && <li className="px-3 py-2 text-slate-500">Belum ada riwayat pembelian yang cocok.</li>}
+                      {rowHistory.map((h, i) => {
+                        const pr = products.find((x) => x.id === h.productId);
+                        return (
+                          <li key={i} className="flex items-center justify-between gap-3 px-3 py-2">
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium">{h.description}{pr ? ` · ${pr.sku}` : ""}</span>
+                              <span className="block text-xs text-slate-500">
+                                {formatPrice(h.lastPrice)} / {h.unit || "pcs"} · {h.supplierName} · {h.poNumber} · {new Date(h.poDate).toLocaleDateString("id-ID")}
+                              </span>
+                            </span>
+                            {pr ? (
+                              <Button type="button" variant="outline" size="sm" onClick={() => pickForRow(rowSearch, pr, h.lastPrice)}>Pakai harga ini</Button>
+                            ) : (
+                              <span className="text-xs text-amber-700">Belum di master</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end">

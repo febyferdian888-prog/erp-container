@@ -9,6 +9,10 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Plus, Trash2, Download } from "lucide-react";
 import { Attachments } from "@/components/attachments";
+import { PartNumberField } from "@/components/part-number-field";
+import { InvoicePaymentPanel } from "@/components/invoice-payment-panel";
+import { dueDateFor, termsToDays, MIN_TERM_DAYS, MAX_TERM_DAYS } from "@/lib/payment-terms";
+import { computeInvoiceMoney, PAYMENT_STATE_LABEL } from "@/lib/invoice-money";
 
 interface Customer {
   id: string;
@@ -41,7 +45,11 @@ interface InvoiceFormProps {
   companyId: string;
 }
 
-const STATUS_OPTIONS = ["draft", "sent", "partial_paid", "paid", "overdue", "cancelled"];
+// Only document-level states are user-selectable; "partial_paid"/"paid"/"overdue"
+// are derived from real money (see lib/invoice-money.ts) and recomputed by the
+// server on every save, so offering them here just invited the exact bug found
+// in Tahap 1 (a manually picked "Paid" surviving even after the balance moved).
+const STATUS_OPTIONS = ["draft", "sent", "cancelled"];
 
 export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
   const router = useRouter();
@@ -180,11 +188,24 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     const numericFields = ["ppnPercent"];
-    setFormData((prev) => ({
-      ...prev,
-      [name]: numericFields.includes(name) ? parseFloat(value) || 0 : value,
-    }));
+    setFormData((prev) => {
+      const next = { ...prev, [name]: numericFields.includes(name) ? parseFloat(value) || 0 : value };
+      if (name === "invoiceDate" || name === "paymentTerms") {
+        const due = dueDateFor(next.invoiceDate, next.paymentTerms);
+        if (due) next.dueDate = due;
+      }
+      return next;
+    });
   };
+
+  // New invoices: keep due date in step when terms arrive from a picked sales order.
+  useEffect(() => {
+    if (invoiceId) return;
+    const due = dueDateFor(formData.invoiceDate, formData.paymentTerms);
+    if (due && due !== formData.dueDate) setFormData((prev) => ({ ...prev, dueDate: due }));
+  }, [formData.invoiceDate, formData.paymentTerms]);
+
+  const dueIsAuto = dueDateFor(formData.invoiceDate, formData.paymentTerms) !== null;
 
   const handleItemChange = (index: number, field: string, value: any) => {
     const newItems = [...items];
@@ -265,10 +286,15 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
   };
 
   const { subtotal, tax, total } = calculateTotals();
-  const cashPaid = paidAmount - origPph;
-  const balanceDue = total - pph - cashPaid;
+  // Single source of truth for the money math (lib/invoice-money.ts) — the
+  // same function the server uses, so this form can never show a payment
+  // status that disagrees with the balance (Tahap 1 audit part A).
+  const money = computeInvoiceMoney({ grandTotal: total, paidAmount, pphAmount: origPph, status: formData.docStatus, dueDate: formData.dueDate || null });
+  const cashPaid = money.cashPaid;
+  const balanceDue = money.balanceDue;
   const formatPrice = (price: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(price);
+  const docStatusOptions = STATUS_OPTIONS.includes(formData.docStatus) ? STATUS_OPTIONS : [formData.docStatus, ...STATUS_OPTIONS];
 
   if (loading) {
     return <div className="text-center py-8">Loading...</div>;
@@ -349,14 +375,34 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="dueDate">Due Date</Label>
-                  <Input id="dueDate" name="dueDate" type="date" value={formData.dueDate} onChange={handleChange} />
+                  <Input id="dueDate" name="dueDate" type="date" value={formData.dueDate} onChange={handleChange} readOnly={dueIsAuto} className={dueIsAuto ? "bg-slate-100" : ""} />
+                  <p className="text-xs text-slate-400">
+                    {dueIsAuto ? "Otomatis dari termin (N30 = +30 hari, cash = +2 hari)." : "Isi termin seperti N30 atau Cash untuk mengisi otomatis."}
+                  </p>
                 </div>
               </div>
 
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="paymentTerms">Payment Terms</Label>
-                  <Input id="paymentTerms" name="paymentTerms" placeholder="e.g., Net 30" value={formData.paymentTerms} onChange={handleChange} />
+                  <div className="flex gap-2">
+                    <Input id="paymentTerms" name="paymentTerms" placeholder="N30, N60, Cash" value={formData.paymentTerms} onChange={handleChange} />
+                    <Input
+                      type="number"
+                      aria-label="Jumlah hari termin"
+                      min={MIN_TERM_DAYS}
+                      max={MAX_TERM_DAYS}
+                      placeholder="Hari"
+                      className="w-24"
+                      value={/cash|tunai|cod|lunas/i.test(formData.paymentTerms) ? "" : termsToDays(formData.paymentTerms) ?? ""}
+                      onChange={(e) => {
+                        const n = Math.min(MAX_TERM_DAYS, Math.max(MIN_TERM_DAYS, parseInt(e.target.value, 10) || 0));
+                        if (e.target.value === "") return;
+                        handleChange({ target: { name: "paymentTerms", value: "N" + n } } as React.ChangeEvent<HTMLInputElement>);
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400">Hari termin {MIN_TERM_DAYS}–{MAX_TERM_DAYS}, atau tulis Cash (+2 hari).</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="ppnPercent">PPN (%)</Label>
@@ -364,20 +410,47 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
                 </div>
                 {invoiceId && (
                   <div className="space-y-2">
-                    <Label htmlFor="docStatus">Status</Label>
+                    <Label htmlFor="docStatus">Status dokumen</Label>
                     <select
                       id="docStatus"
                       name="docStatus"
                       value={formData.docStatus}
                       onChange={handleChange}
-                      className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white capitalize"
+                      disabled={!["draft", "sent", "cancelled"].includes(formData.docStatus)}
+                      className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white capitalize disabled:bg-slate-50 disabled:text-slate-500"
                     >
-                      {STATUS_OPTIONS.map((s) => (
+                      {docStatusOptions.map((s) => (
                         <option key={s} value={s}>
                           {s.replace("_", " ")}
                         </option>
                       ))}
                     </select>
+                    <p className="text-[11px] text-slate-400">
+                      {["draft", "sent", "cancelled"].includes(formData.docStatus)
+                        ? "Draft, sent, atau cancelled dipilih manual."
+                        : "Status pelunasan dihitung otomatis dari pembayaran, tidak bisa dipilih manual di sini."}
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-[11px] text-slate-500">Status pelunasan:</span>
+                      <span
+                        className={`inline-flex px-2 py-0.5 rounded text-[11px] font-semibold uppercase ${
+                          money.paymentState === "paid"
+                            ? "bg-green-100 text-green-700"
+                            : money.paymentState === "overpaid"
+                            ? "bg-blue-100 text-blue-700"
+                            : money.paymentState === "partial"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        {PAYMENT_STATE_LABEL[money.paymentState]}
+                      </span>
+                      {money.isOverdue && (
+                        <span className="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold uppercase bg-red-100 text-red-700">
+                          Lewat jatuh tempo {money.daysOverdue} hari
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -421,7 +494,7 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
                     {items.map((item, index) => (
                       <tr key={index} className="border-b border-slate-200">
                         <td className="p-2">
-                          <Input value={item.partNumber} onChange={(e) => handleItemChange(index, "partNumber", e.target.value)} placeholder="Part no." className="border-0" />
+                          <PartNumberField value={item.partNumber} onChange={(v) => handleItemChange(index, "partNumber", v)} className="border-0" />
                         </td>
                         <td className="p-2">
                           <Input value={item.description} onChange={(e) => handleItemChange(index, "description", e.target.value)} placeholder="Item description" className="border-0" required />
@@ -499,9 +572,14 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
                   </div>
                 )}
                 <div className="border-t border-slate-300 pt-2 flex justify-between">
-                  <span className="font-bold">{cashPaid > 0 || pph > 0 ? "Balance Due:" : "Total Due:"}</span>
-                  <span className="font-bold text-lg text-blue-700">{formatPrice(balanceDue)}</span>
+                  <span className="font-bold">{money.paymentState === "overpaid" ? "Kelebihan Bayar:" : cashPaid > 0 || pph > 0 ? "Balance Due:" : "Total Due:"}</span>
+                  <span className={`font-bold text-lg ${money.paymentState === "overpaid" ? "text-blue-700" : "text-blue-700"}`}>
+                    {formatPrice(money.paymentState === "overpaid" ? money.overpaidAmount : balanceDue)}
+                  </span>
                 </div>
+                {money.paymentState === "overpaid" && (
+                  <p className="text-[11px] text-blue-700">Pembayaran melebihi tagihan. Sisa ini adalah kredit pelanggan, bukan piutang.</p>
+                )}
               </div>
             </div>
 
@@ -516,6 +594,16 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
           </form>
         </CardContent>
       </Card>
+      {invoiceId && (
+        <InvoicePaymentPanel
+          invoiceId={invoiceId}
+          grandTotal={money.grandTotal}
+          cashPaid={money.cashPaid}
+          pphWithheld={money.pphWithheld}
+          balanceDue={money.balanceDue}
+          stateLabel={PAYMENT_STATE_LABEL[money.paymentState]}
+        />
+      )}
       {invoiceId && <Attachments referenceType="Invoice" referenceId={invoiceId} />}
     </div>
   );

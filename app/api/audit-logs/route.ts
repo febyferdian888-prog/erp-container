@@ -60,7 +60,10 @@ export async function GET(req: NextRequest) {
       rows: visibleRows.map((r) => ({
         id: r.id,
         createdAt: r.createdAt,
-        user: r.user ? r.user.name || r.user.email : "Sistem",
+        // A resolved user wins; otherwise the row's own recorded actor (e.g. an
+        // import script's createdBy email) beats a bare, untraceable "Sistem"
+        // (Tahap 8 audit).
+        user: r.user ? r.user.name || r.user.email : r.actorLabel ? `${r.actorLabel} (proses otomatis)` : "Sistem",
         entityType: r.entityType,
         entityId: r.entityId,
         action: r.action,

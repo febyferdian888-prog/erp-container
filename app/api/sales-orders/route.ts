@@ -3,7 +3,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
-import { guard } from "@/lib/rbac";
+import { guard, canSeeSalesPrices } from "@/lib/rbac";
+import { loadSoProgress } from "@/lib/so-progress";
+import { findUnregisteredParts, unregisteredMessage } from "@/lib/part-registry";
 
 export async function GET(req: NextRequest) {
   try {
@@ -37,7 +39,15 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json(salesOrders);
+    const progress = await loadSoProgress(prisma, salesOrders.map((o) => o.id));
+    const showPrices = await canSeeSalesPrices();
+    return NextResponse.json(
+      salesOrders.map((o) => ({
+        ...o,
+        items: showPrices ? o.items : o.items.map(({ unitPrice, subtotal, ...rest }) => rest),
+        progress: progress[o.id],
+      }))
+    );
   } catch (error) {
     console.error("GET /api/sales-orders error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -69,6 +79,13 @@ export async function POST(req: NextRequest) {
         { error: "companyId, customerId, poNumber, poDate, and at least one item are required" },
         { status: 400 }
       );
+    }
+
+    {
+      const missing = await findUnregisteredParts(prisma, companyId, items);
+      if (missing.length) {
+        return NextResponse.json({ error: unregisteredMessage(missing), code: "PART_NOT_REGISTERED", missing }, { status: 400 });
+      }
     }
 
     const { year, start, end } = currentYearRange();
@@ -103,6 +120,14 @@ export async function POST(req: NextRequest) {
       },
       include: { customer: true, items: true },
     });
+
+    // A customer PO arriving against a sent quotation means the customer accepted it.
+    if (quotationId) {
+      await prisma.quotation.updateMany({
+        where: { id: quotationId, status: "sent" },
+        data: { status: "accepted" },
+      });
+    }
 
     return NextResponse.json(salesOrder, { status: 201 });
   } catch (error) {

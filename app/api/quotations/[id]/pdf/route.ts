@@ -58,6 +58,9 @@ export async function GET(
         phone: quotation.company.phone,
         email: quotation.company.email,
         npwp: quotation.company.npwp,
+        logo: quotation.company.logo,
+        signatoryName: quotation.company.signatoryName,
+        signatoryTitle: quotation.company.signatoryTitle,
       },
       customer: {
         name: quotation.customer.name,
@@ -68,6 +71,7 @@ export async function GET(
         lineNumber: item.lineNumber,
         partNumber: item.partNumber,
         description: item.description,
+        specification: item.specification,
         quantity: Number(item.quantity),
         unit: item.unit,
         unitPrice: Number(item.unitPrice),

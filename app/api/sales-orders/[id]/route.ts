@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
-import { guard } from "@/lib/rbac";
+import { guard, canSeeSalesPrices } from "@/lib/rbac";
+import { loadSoProgress } from "@/lib/so-progress";
 
 export async function GET(
   req: NextRequest,
@@ -22,8 +23,10 @@ export async function GET(
         customer: true,
         quotation: { select: { id: true, number: true } },
         items: { orderBy: { lineNumber: "asc" } },
-        deliveries: { where: { deletedAt: null }, select: { id: true, deliveryNumber: true } },
-        invoices: { where: { deletedAt: null }, select: { id: true, invoiceNumber: true } },
+        deliveries: { where: { deletedAt: null }, select: { id: true, deliveryNumber: true, status: true } },
+        invoices: { where: { deletedAt: null }, select: { id: true, invoiceNumber: true, status: true } },
+        purchaseOrders: { where: { deletedAt: null }, select: { id: true, poNumber: true, status: true } },
+        poSources: { select: { purchaseOrder: { select: { id: true, poNumber: true, status: true, deletedAt: true } } } },
       },
     });
 
@@ -31,7 +34,14 @@ export async function GET(
       return NextResponse.json({ error: "Sales order not found" }, { status: 404 });
     }
 
-    return NextResponse.json(salesOrder);
+    const progress = (await loadSoProgress(prisma, [id]))[id];
+    if (await canSeeSalesPrices()) return NextResponse.json({ ...salesOrder, progress });
+    const { invoices: _invoices, ...rest } = salesOrder;
+    return NextResponse.json({
+      ...rest,
+      items: salesOrder.items.map(({ unitPrice, subtotal, ...item }) => item),
+      progress,
+    });
   } catch (error) {
     console.error("GET /api/sales-orders/[id] error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

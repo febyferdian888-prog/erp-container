@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { guard } from "@/lib/rbac";
+import { pick } from "@/lib/pick";
 
 export async function GET(
   req: NextRequest,
@@ -81,7 +82,7 @@ export async function PUT(
 
     const updated = await prisma.customer.update({
       where: { id },
-      data: body,
+      data: pick(body, ["code","name","description","address","city","province","country","postalCode","phone","email","npwp","isActive"]),
     });
 
     return NextResponse.json(updated);

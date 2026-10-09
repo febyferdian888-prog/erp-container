@@ -11,6 +11,8 @@ import { normName } from "@/lib/name-utils";
 interface PreviewItem {
   row: number; partNumber: string; description: string; qty: number; unit: string; unitPrice: number;
   subtotal: number; soRef: string; soId: string | null; soNumber: string | null; notes: string;
+  extraSoNumbers: string[]; originalPartNumber: string | null;
+  partMatch: { status: "exact" | "normalized" | "similar" | "suggest" | "new" | "none"; canonical: string | null; suggestions: { partNumber: string; label?: string }[] };
 }
 interface PreviewBill {
   key: string; vendorName: string; invoiceNo: string; date: string | null; dueDate: string | null; ppn: number;
@@ -21,7 +23,7 @@ interface VendorMatch { name: string; rows: number; supplierId: string | null; s
 interface Preview {
   vendors: VendorMatch[];
   bills: PreviewBill[];
-  summary: { rows: number; bills: number; ready: number; errors: number; duplicates: number; newVendors: number; grandTotal: number; linkedItems: number; totalItems: number };
+  summary: { rows: number; bills: number; ready: number; errors: number; duplicates: number; newVendors: number; grandTotal: number; linkedItems: number; totalItems: number; partsAligned: number; partsSuggest: number; partsNew: number; multiSoItems: number };
 }
 interface Supplier { id: string; code: string; name: string }
 interface Result { vendorName: string; invoiceNo: string; status: "created" | "skipped" | "failed"; billNumber?: string; reason?: string }
@@ -112,8 +114,8 @@ export default function PurchaseImportPage() {
   const downloadTemplate = async () => {
     const XLSX = await import("xlsx");
     const ws = XLSX.utils.aoa_to_sheet([
-      ["Tanggal", "Vendor", "No. Invoice Vendor", "Nomor Part", "Deskripsi", "Qty", "Satuan", "Harga Satuan", "PPN (%)", "Jatuh Tempo", "No. PO Customer", "Tanggal Bayar", "Jumlah Dibayar", "Catatan"],
-      ["2026-03-05", "PT. Contoh Vendor", "INV-0001", "6745-71-5120", "TUBE", 2, "pcs", 1300000, 11, "2026-04-04", "PO0126020852", "", "", ""],
+      ["Tanggal", "Vendor", "No. Invoice Vendor", "Nomor Part", "Deskripsi", "Qty", "Satuan", "Harga Satuan", "PPN (%)", "Jatuh Tempo", "No. PO Customer", "Tanggal Bayar", "Jumlah Dibayar", "Catatan", "No. Sales Order"],
+      ["2026-03-05", "PT. Contoh Vendor", "INV-0001", "6745-71-5120", "TUBE", 2, "pcs", 1300000, 11, "2026-04-04", "PO0126020852", "", "", "", "SO-2026-0001 / SO-2026-0002"],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Pembelian");
@@ -349,7 +351,10 @@ export default function PurchaseImportPage() {
                 ["Siap disimpan", `${preview.summary.ready} bill`, idr(preview.summary.grandTotal)],
                 ["Bermasalah", `${preview.summary.errors} bill`, "dilewati, perbaiki di Excel"],
                 ["Sudah ada", `${preview.summary.duplicates} bill`, "no. invoice vendor sama"],
-                ["Terhubung ke penjualan", `${preview.summary.linkedItems} / ${preview.summary.totalItems} item`, "cocok dengan Sales Order"],
+                ["Terhubung ke penjualan", `${preview.summary.linkedItems} / ${preview.summary.totalItems} item`, `cocok dengan Sales Order${preview.summary.multiSoItems ? `, ${preview.summary.multiSoItems} item untuk >1 SO` : ""}`],
+                ["Part disamakan", `${preview.summary.partsAligned} item`, "mirip part di invoice/SO/master, dianggap benar"],
+                ["Part mirip, perlu dicek", `${preview.summary.partsSuggest} item`, "hanya saran, tidak diubah otomatis"],
+                ["Part belum terdaftar", `${preview.summary.partsNew} item`, "belum ada di master maupun invoice"],
               ].map(([l, v, n]) => (
                 <div key={l} className="border border-slate-200 bg-white p-4">
                   <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-400">{l}</p>
@@ -437,12 +442,17 @@ export default function PurchaseImportPage() {
                                   {b.items.map((i) => (
                                     <tr key={i.row} className="border-b border-slate-100">
                                       <td className={td}>{i.row}</td>
-                                      <td className={`${td} font-mono text-xs`}>{i.partNumber || "-"}</td>
+                                      <td className={`${td} font-mono text-xs`}>
+                                        {i.partNumber || "-"}
+                                        {i.originalPartNumber && <span className="block text-[10px] text-amber-700">rekap: {i.originalPartNumber}</span>}
+                                        {i.partMatch.status === "suggest" && <span className="block text-[10px] text-amber-700">mirip: {i.partMatch.suggestions.map((x) => x.partNumber).join(", ")}</span>}
+                                        {i.partMatch.status === "new" && <span className="block text-[10px] text-slate-400">belum terdaftar</span>}
+                                      </td>
                                       <td className={td}>{i.description}</td>
                                       <td className={tdr}>{i.qty} {i.unit}</td>
                                       <td className={tdr}>{idr(i.unitPrice)}</td>
                                       <td className={tdr}>{idr(i.subtotal)}</td>
-                                      <td className={td}>{i.soNumber ?? (i.soRef ? <span className="text-amber-700">{i.soRef} (tidak cocok)</span> : "-")}</td>
+                                      <td className={td}>{i.soNumber ? <>{i.soNumber}{i.extraSoNumbers.length > 0 && <span className="block text-[10px] text-amber-700">+ {i.extraSoNumbers.join(", ")}</span>}</> : i.soRef ? <span className="text-amber-700">{i.soRef} (tidak cocok)</span> : "-"}</td>
                                     </tr>
                                   ))}
                                 </tbody>

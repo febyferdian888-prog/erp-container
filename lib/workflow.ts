@@ -1,20 +1,13 @@
 import type { Prisma } from "@prisma/client";
+import { computeInvoiceMoney, nextDocumentStatus } from "./invoice-money";
 
 type Tx = Prisma.TransactionClient;
 
 export async function recalcInvoiceStatus(tx: Tx, invoiceId: string) {
   const inv = await tx.invoice.findUnique({ where: { id: invoiceId } });
   if (!inv || inv.status === "cancelled") return;
-  const paid = Number(inv.paidAmount);
-  const grand = Number(inv.grandTotal);
-
-  const cash = paid - Number(inv.pphAmount); // tax withheld by the customer counts as settled but is not a payment
-  let next = inv.status;
-  if (paid > 0 && paid >= grand - 0.5) next = "paid";
-  else if (cash > 0.5) next = "partial_paid";
-  else if (inv.status === "paid" || inv.status === "partial_paid") next = "sent";
-  else if (inv.status === "sent" && inv.dueDate && inv.dueDate < new Date()) next = "overdue";
-
+  const money = computeInvoiceMoney(inv);
+  const next = nextDocumentStatus(inv.status, money);
   if (next !== inv.status) await tx.invoice.update({ where: { id: invoiceId }, data: { status: next } });
 }
 
@@ -24,7 +17,7 @@ export async function recalcSalesOrderStatus(tx: Tx, soId: string | null | undef
     where: { id: soId },
     include: { items: true },
   });
-  if (!so || so.status === "draft" || so.status === "cancelled") return;
+  if (!so || so.status === "cancelled") return;
 
   const invoiceCount = await tx.invoice.count({
     where: { soId, deletedAt: null, status: { not: "cancelled" } },
@@ -40,6 +33,9 @@ export async function recalcSalesOrderStatus(tx: Tx, soId: string | null | undef
   });
   const deliveredQty = Number(delivered._sum.quantity || 0);
   const orderedQty = so.items.reduce((s, i) => s + Number(i.quantity), 0);
+
+  // A draft order with nothing shipped or billed stays draft; once a document exists it is no longer a draft.
+  if (deliveredQty <= 0 && so.status === "draft") return;
 
   const next =
     deliveredQty <= 0 ? "confirmed" : deliveredQty >= orderedQty ? "delivered" : "partially_delivered";
@@ -109,15 +105,7 @@ export async function reverseDeliveryStock(tx: Tx, deliveryId: string) {
 export async function recalcBillStatus(tx: Tx, billId: string) {
   const bill = await tx.bill.findUnique({ where: { id: billId } });
   if (!bill || bill.status === "cancelled") return;
-  const paid = Number(bill.paidAmount);
-  const grand = Number(bill.grandTotal);
-
-  const cash = paid - Number(bill.pphAmount);
-  let next = bill.status;
-  if (paid > 0 && paid >= grand - 0.5) next = "paid";
-  else if (cash > 0.5) next = "partial_paid";
-  else if (bill.status === "paid" || bill.status === "partial_paid") next = "received";
-  else if (bill.status === "received" && bill.dueDate && bill.dueDate < new Date()) next = "overdue";
-
+  const money = computeInvoiceMoney(bill);
+  const next = nextDocumentStatus(bill.status, money, "received");
   if (next !== bill.status) await tx.bill.update({ where: { id: billId }, data: { status: next } });
 }

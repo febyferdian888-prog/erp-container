@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ interface ProductFormProps {
 
 export function ProductForm({ productId, companyId }: ProductFormProps) {
   const router = useRouter();
+  const prefillSku = useSearchParams().get("sku") || "";
   const { status } = useSession();
   const [loading, setLoading] = useState(!!productId);
   const [submitting, setSubmitting] = useState(false);
@@ -35,12 +36,13 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
   const [categories, setCategories] = useState<Category[]>([]);
 
   const [formData, setFormData] = useState({
-    sku: "",
+    sku: prefillSku,
     name: "",
     description: "",
     unitId: "",
     categoryId: "",
     standardPrice: "",
+    itemType: "goods",
   });
 
   useEffect(() => {
@@ -82,6 +84,7 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
         unitId: data.unitId,
         categoryId: data.categoryId || "",
         standardPrice: data.standardPrice?.toString() || "0",
+        itemType: data.itemType || "goods",
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error loading product");
@@ -110,6 +113,7 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
           unitId: formData.unitId,
           categoryId: formData.categoryId || null,
           standardPrice: parseFloat(formData.standardPrice) || 0,
+          itemType: formData.itemType,
         }),
       });
 
@@ -244,6 +248,26 @@ export function ProductForm({ productId, companyId }: ProductFormProps) {
                     ))}
                   </select>
                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 border-t pt-4">
+              <h3 className="font-semibold text-slate-900">Jenis Item</h3>
+              <div className="space-y-2">
+                <Label htmlFor="itemType">Tipe</Label>
+                <select
+                  id="itemType"
+                  name="itemType"
+                  value={formData.itemType}
+                  onChange={handleChange}
+                  className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white"
+                >
+                  <option value="goods">Barang (dilacak stok)</option>
+                  <option value="service">Jasa (tidak ada stok fisik)</option>
+                </select>
+                <p className="text-xs text-slate-500">
+                  Jasa (mis. ongkir, instalasi) tidak pernah muncul di daftar stok atau peringatan stok minimum.
+                </p>
               </div>
             </div>
 

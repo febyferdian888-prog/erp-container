@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { recalcBillStatus } from "@/lib/workflow";
+import { syncJournal } from "@/lib/accounting";
 import { guard } from "@/lib/rbac";
 import { userHasCompanyAccess } from "@/lib/company-access";
 
@@ -64,33 +65,49 @@ export async function PUT(
     const body = await req.json();
     const { paymentDate, amount, method, bankAccount, description, notes, status } = body;
 
-    if (
-      payment.referenceType === "Bill" &&
-      payment.referenceId &&
-      amount !== undefined &&
-      Number(amount) !== Number(payment.amount)
-    ) {
-      const delta = Number(amount) - Number(payment.amount);
-      await prisma.bill.update({
-        where: { id: payment.referenceId },
-        data: { paidAmount: { increment: delta } },
-      });
-      await recalcBillStatus(prisma, payment.referenceId);
+    if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) <= 0)) {
+      return NextResponse.json({ error: "Jumlah pembayaran harus lebih dari 0" }, { status: 400 });
+    }
+    if (paymentDate !== undefined && Number.isNaN(new Date(paymentDate).getTime())) {
+      return NextResponse.json({ error: "Tanggal pembayaran tidak valid" }, { status: 400 });
     }
 
-    const updated = await prisma.payment.update({
-      where: { id },
-      data: {
-        amount,
-        method,
-        bankAccount,
-        description,
-        notes,
-        status,
-        paymentDate: paymentDate ? new Date(paymentDate) : undefined,
-      },
-      include: { supplier: true },
+    const amountChanged =
+      payment.referenceType === "Bill" && !!payment.referenceId && amount !== undefined && Number(amount) !== Number(payment.amount);
+    if (amountChanged) {
+      const bill = await prisma.bill.findUnique({ where: { id: payment.referenceId as string } });
+      if (bill) {
+        const room = Number(bill.grandTotal) - Number(bill.paidAmount) + Number(payment.amount);
+        if (Number(amount) > room + 0.5) {
+          return NextResponse.json({ error: "Jumlah melebihi sisa tagihan bill ini" }, { status: 400 });
+        }
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (amountChanged) {
+        await tx.bill.update({
+          where: { id: payment.referenceId as string },
+          data: { paidAmount: { increment: Number(amount) - Number(payment.amount) } },
+        });
+      }
+      return tx.payment.update({
+        where: { id },
+        data: {
+          amount,
+          method,
+          bankAccount,
+          description,
+          notes,
+          status,
+          paymentDate: paymentDate ? new Date(paymentDate) : undefined,
+        },
+        include: { supplier: true },
+      });
     });
+
+    if (payment.referenceType === "Bill" && payment.referenceId) await recalcBillStatus(prisma, payment.referenceId);
+    await syncJournal(prisma, "Payment", id);
 
     return NextResponse.json(updated);
   } catch (error) {
@@ -123,17 +140,19 @@ export async function DELETE(
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
-    if (payment.referenceType === "Bill" && payment.referenceId) {
-      await prisma.bill.update({
-        where: { id: payment.referenceId },
-        data: { paidAmount: { decrement: payment.amount } },
-      });
-    }
-
-    await prisma.payment.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      if (payment.referenceType === "Bill" && payment.referenceId) {
+        await tx.bill.update({
+          where: { id: payment.referenceId },
+          data: { paidAmount: { decrement: payment.amount } },
+        });
+      }
+      await tx.payment.delete({ where: { id } });
+    });
     if (payment.referenceType === "Bill" && payment.referenceId) {
       await recalcBillStatus(prisma, payment.referenceId);
     }
+    await syncJournal(prisma, "Payment", id);
 
     return NextResponse.json({ success: true });
   } catch (error) {

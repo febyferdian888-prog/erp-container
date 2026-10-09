@@ -20,6 +20,7 @@ export async function GET(
       where: { id },
       include: {
         customer: true,
+        items: { orderBy: { lineNumber: "asc" } },
         quotations: { where: { deletedAt: null }, select: { id: true, number: true } },
       },
     });

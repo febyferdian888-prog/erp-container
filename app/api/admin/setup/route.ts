@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import bcryptjs from "bcryptjs";
+import { randomBytes } from "crypto";
 import { Prisma } from "@prisma/client";
 
 export async function POST(req: NextRequest) {
@@ -85,7 +86,8 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const hashedPassword = await bcryptjs.hash("admin123", 10);
+    const initialPassword = randomBytes(12).toString("base64url");
+    const hashedPassword = await bcryptjs.hash(initialPassword, 10);
     const user = await prisma.user.create({
       data: {
         name: "Admin",
@@ -158,7 +160,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       {
-        message: "Database initialized successfully",
+        message: "Database initialized successfully. Simpan password admin ini sekarang, tidak akan ditampilkan lagi.",
+        adminPassword: initialPassword,
         data: {
           company: company.name,
           user: user.email,
@@ -172,7 +175,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("Setup error:", error);
     return NextResponse.json(
-      { error: "Setup failed", details: String(error) },
+      { error: "Setup failed" },
       { status: 500 }
     );
   }

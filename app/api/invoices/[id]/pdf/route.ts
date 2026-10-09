@@ -22,7 +22,9 @@ export async function GET(
       where: { id },
       include: {
         company: true,
-        customer: true,
+        customer: { include: { contacts: { where: { deletedAt: null }, orderBy: { isDefault: "desc" }, take: 1 } } },
+        salesOrder: { select: { poNumber: true } },
+        deliveries: { where: { deletedAt: null }, select: { deliveryNumber: true } },
         items: { orderBy: { lineNumber: "asc" } },
       },
     });
@@ -41,9 +43,9 @@ export async function GET(
     const data: InvoicePdfData = {
       invoiceNumber: invoice.invoiceNumber,
       invoiceDate: invoice.invoiceDate.toISOString(),
-      dueDate: invoice.dueDate ? invoice.dueDate.toISOString() : null,
       paymentTerms: invoice.paymentTerms,
-      status: invoice.status,
+      poNumber: invoice.salesOrder?.poNumber ?? null,
+      deliveryNumbers: invoice.deliveries.map((d) => d.deliveryNumber),
       ppnPercent: Number(invoice.ppnPercent),
       totalAmount: Number(invoice.totalAmount),
       taxAmount: Number(invoice.taxAmount),
@@ -63,11 +65,15 @@ export async function GET(
         npwp: invoice.company.npwp,
         bankName: invoice.company.bankName,
         bankAccount: invoice.company.bankAccount,
+        logo: invoice.company.logo,
+        signatoryName: invoice.company.signatoryName,
+        signatoryTitle: invoice.company.signatoryTitle,
       },
       customer: {
         name: invoice.customer.name,
         address: invoice.customer.address,
         city: invoice.customer.city,
+        picName: invoice.customer.contacts[0]?.name ?? null,
       },
       items: invoice.items.map((item) => ({
         lineNumber: item.lineNumber,

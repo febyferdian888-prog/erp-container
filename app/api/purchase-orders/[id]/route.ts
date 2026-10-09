@@ -4,6 +4,10 @@ import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { ApprovalRequiredError, assertReleaseAllowed } from "@/lib/approval";
 import { guard } from "@/lib/rbac";
+import { findUnlinkedProductLines, unlinkedProductMessage } from "@/lib/part-registry";
+import { ensureAutoGoodsReceipt } from "@/lib/goods-receipt";
+
+const AUTO_GR_TRIGGER_STATUSES = new Set(["sent", "confirmed"]);
 
 export async function GET(
   req: NextRequest,
@@ -24,6 +28,7 @@ export async function GET(
         supplier: true,
         purchaseRequest: { select: { id: true, requestNumber: true } },
         salesOrder: { select: { id: true, soNumber: true, poNumber: true } },
+        sources: { select: { salesOrder: { select: { id: true, soNumber: true, poNumber: true } } } },
         items: { orderBy: { lineNumber: "asc" } },
       },
     });
@@ -59,13 +64,22 @@ export async function PUT(
       poDate,
       deliveryDate,
       paymentTerms,
+      shipToAddress,
+      ppnPercent,
+      pphPercent,
+      dpPercent,
+      revisionNumber,
       status,
       notes,
       items,
     } = body;
 
-    const existing = await prisma.purchaseOrder.findUnique({ where: { id }, include: { items: true } });
+    const existing = await prisma.purchaseOrder.findUnique({ where: { id }, include: { items: true, sources: { select: { soId: true } } } });
     if (!existing) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
+    if (items) {
+      const bad = await findUnlinkedProductLines(prisma, existing.companyId, items);
+      if (bad.length) return NextResponse.json({ error: unlinkedProductMessage(bad), code: "PRODUCT_NOT_LINKED" }, { status: 400 });
+    }
     const total = items
       ? items.reduce((sum: number, i: any) => sum + Number(i.quantity) * Number(i.unitPrice), 0)
       : existing.items.reduce((sum, i) => sum + Number(i.subtotal), 0);
@@ -76,39 +90,60 @@ export async function PUT(
       throw e;
     }
 
-    if (items) {
-      await prisma.purchaseOrderItem.deleteMany({ where: { poId: id } });
-    }
+    const poSoIds = [...new Set([...(existing.soId ? [existing.soId] : []), ...existing.sources.map((x) => x.soId)])];
+    const validSoItemIds = new Set(
+      poSoIds.length ? (await prisma.salesOrderItem.findMany({ where: { soId: { in: poSoIds } }, select: { id: true } })).map((x) => x.id) : []
+    );
 
-    const purchaseOrder = await prisma.purchaseOrder.update({
-      where: { id },
-      data: {
-        supplierId,
-        projectId: projectId || null,
-        soId: soId || null,
-        poDate: poDate ? new Date(poDate) : undefined,
-        deliveryDate: deliveryDate ? new Date(deliveryDate) : null,
-        paymentTerms,
-        status,
-        notes,
-        ...(items
-          ? {
-              items: {
-                create: items.map((item: any, index: number) => ({
-                  productId: item.productId || null,
-                  lineNumber: index + 1,
-                  description: item.description,
-                  quantity: item.quantity,
-                  unit: item.unit,
-                  unitPrice: item.unitPrice,
-                  subtotal: Number(item.quantity) * Number(item.unitPrice),
-                  notes: item.notes,
-                })),
-              },
-            }
-          : {}),
-      },
-      include: { items: true, supplier: true },
+    const purchaseOrder = await prisma.$transaction(async (tx) => {
+      if (items) {
+        await tx.purchaseOrderItem.deleteMany({ where: { poId: id } });
+      }
+
+      const updated = await tx.purchaseOrder.update({
+        where: { id },
+        data: {
+          supplierId,
+          projectId: projectId || null,
+          soId: soId || existing.soId || existing.sources[0]?.soId || null,
+          poDate: poDate ? new Date(poDate) : undefined,
+          deliveryDate: deliveryDate ? new Date(deliveryDate) : null,
+          paymentTerms,
+          shipToAddress: shipToAddress || null,
+          ...(ppnPercent !== undefined ? { ppnPercent } : {}),
+          ...(pphPercent !== undefined ? { pphPercent } : {}),
+          ...(dpPercent !== undefined ? { dpPercent: Math.min(Math.max(Number(dpPercent) || 0, 0), 100) } : {}),
+          ...(revisionNumber !== undefined ? { revisionNumber } : {}),
+          status,
+          notes,
+          ...(items
+            ? {
+                items: {
+                  create: items.map((item: any, index: number) => ({
+                    productId: item.productId || null,
+                    soItemId: item.soItemId && validSoItemIds.has(item.soItemId) ? item.soItemId : null,
+                    lineNumber: index + 1,
+                    description: item.description,
+                    brand: item.brand || null,
+                    quantity: item.quantity,
+                    unit: item.unit,
+                    unitPrice: item.unitPrice,
+                    subtotal: Number(item.quantity) * Number(item.unitPrice),
+                    notes: item.notes,
+                  })),
+                },
+              }
+            : {}),
+        },
+        include: { items: true, supplier: true },
+      });
+
+      // Raise (or re-sync) the draft GR waiting for SCM once this PO is out to the vendor.
+      if (AUTO_GR_TRIGGER_STATUSES.has(updated.status) || items) {
+        await ensureAutoGoodsReceipt(tx, id, session.user!.email!);
+      }
+
+      return updated;
     });
 
     return NextResponse.json(purchaseOrder);

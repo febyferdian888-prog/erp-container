@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import Link, { useLinkStatus } from "next/link";
 import Image from "next/image";
 import { usePermissions } from "@/components/permissions";
@@ -33,6 +33,12 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { me, loaded } = usePermissions();
   const visibleItems = menuItems.filter((item) => !me || pageAllowed(item.href, me.perms));
   const blocked = loaded && !!me && !pageAllowed(pathname, me.perms);
+  const homeHref = visibleItems[0]?.href ?? "/settings";
+  const router = useRouter();
+
+  useEffect(() => {
+    if (blocked && pathname === "/dashboard") router.replace(homeHref);
+  }, [blocked, pathname, homeHref, router]);
   const [collapsed, setCollapsed] = useState(false);
   const [companyName, setCompanyName] = useState<string | null>(null);
   const [companyError, setCompanyError] = useState(false);
@@ -105,7 +111,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Akses dibatasi</p>
             <h1 className="mt-2 text-2xl font-semibold text-slate-900">Peran Anda tidak punya akses ke halaman ini</h1>
             <p className="mt-2 text-sm text-slate-500">Peran saat ini: {me?.roles.join(", ")}. Hubungi admin bila Anda perlu akses.</p>
-            <Link href="/dashboard" className="mt-6 inline-block border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Kembali ke dashboard</Link>
+            <Link href={homeHref} className="mt-6 inline-block border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Kembali ke halaman utama</Link>
           </div>
         ) : children}</main>
         <footer className="erp-footer"><span>{companyError ? "Informasi perusahaan tidak tersedia" : companyName ?? "Memuat perusahaan…"}</span><span>ERP · Pengadaan & fabrikasi</span></footer>

@@ -62,15 +62,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { companyId, code, name, email, phone, address, city, province, country, postalCode, npwp } = body;
 
-    const membership = await prisma.userMembership.findUnique({
-      where: {
-        userId_companyId_roleId: {
-          userId: session.user.id!,
-          companyId,
-          roleId: "", // Will be filled by DB constraint
-        },
-      },
-    }).catch(() => null);
+    const membership = await prisma.userMembership.findFirst({
+      where: { userId: session.user.id!, companyId, isActive: true },
+    });
 
     if (!membership) {
       return NextResponse.json({ error: "No access to this company" }, { status: 403 });

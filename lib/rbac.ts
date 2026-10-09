@@ -44,6 +44,12 @@ export async function getAccess(): Promise<Access | null> {
   return access;
 }
 
+// Selling prices and order values belong to sales and finance; purchasing sees what to buy, not what it sells for.
+export async function canSeeSalesPrices() {
+  const access = await getAccess();
+  return !!access && can(access.perms, ["sales", "finance", "reports"], "view");
+}
+
 // Returns a response to send back when the request is not allowed, otherwise null.
 export async function guard(areas: Area[] | "any", level: "view" | "edit") {
   const access = await getAccess();

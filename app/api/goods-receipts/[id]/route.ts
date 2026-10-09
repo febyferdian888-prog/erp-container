@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { guard } from "@/lib/rbac";
+import { applyGoodsReceiptToStock, ensureAutoGoodsReceipt } from "@/lib/goods-receipt";
 
 export async function GET(
   req: NextRequest,
@@ -25,6 +26,7 @@ export async function GET(
         },
         warehouse: { select: { id: true, code: true, name: true } },
         items: true,
+        claims: { orderBy: { createdAt: "desc" }, take: 1 },
       },
     });
 
@@ -52,12 +54,81 @@ export async function PUT(
 
     const { id } = await params;
     const body = await req.json();
-    const { status, notes } = body;
+    const { status, notes, warehouseId, items } = body;
 
-    const goodsReceipt = await prisma.goodsReceipt.update({
+    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+    const existing = await prisma.goodsReceipt.findUnique({
       where: { id },
-      data: { status, notes },
-      include: { items: true, purchaseOrder: { select: { poNumber: true } } },
+      include: { items: true, purchaseOrder: { select: { supplierId: true } } },
+    });
+    if (!existing) return NextResponse.json({ error: "Goods receipt not found" }, { status: 404 });
+
+    // Confirming an auto-raised draft: this is the first time its quantities post to
+    // PO receivedQty / warehouse stock (see lib/goods-receipt.ts — never twice).
+    const isConfirming = !existing.stockApplied && status && status !== "draft";
+
+    const QC_DONE_STATUSES = ["inspected", "accepted", "rejected"];
+    const enteringQcDone = QC_DONE_STATUSES.includes(status) && !existing.inspectedByName;
+
+    const goodsReceipt = await prisma.$transaction(async (tx) => {
+      // While still a draft, SCM can correct quantities/condition before confirming.
+      if (items && !existing.stockApplied) {
+        for (const it of items) {
+          await tx.goodsReceiptItem.update({
+            where: { id: it.id },
+            data: { quantity: it.quantity, condition: it.condition, notes: it.notes },
+          });
+        }
+        if (warehouseId !== undefined) {
+          await tx.goodsReceipt.update({ where: { id }, data: { warehouseId: warehouseId || null } });
+        }
+      }
+
+      const updated = await tx.goodsReceipt.update({
+        where: { id },
+        data: {
+          status,
+          notes,
+          ...(isConfirming ? { stockApplied: true } : {}),
+          ...(enteringQcDone
+            ? { inspectedByName: user?.name || session.user!.email, inspectedAt: new Date() }
+            : {}),
+        },
+        include: { items: true, purchaseOrder: { select: { poNumber: true } } },
+      });
+
+      if (isConfirming) {
+        await applyGoodsReceiptToStock(
+          tx,
+          { id: updated.id, poId: existing.poId, warehouseId: updated.warehouseId, receiptNumber: updated.receiptNumber },
+          updated.items,
+          session.user!.email!
+        );
+        // If this only covered part of the PO, raise a fresh draft for what's still outstanding.
+        await ensureAutoGoodsReceipt(tx, existing.poId, session.user!.email!);
+      }
+
+      const hasIssueItems = updated.items.some((i) => i.condition === "defect" || i.condition === "partial");
+      const needsClaim = QC_DONE_STATUSES.includes(status) && hasIssueItems;
+      if (needsClaim && existing.purchaseOrder.supplierId) {
+        const alreadyClaimed = await tx.supplierClaim.findFirst({ where: { grId: id } });
+        if (!alreadyClaimed) {
+          const count = await tx.supplierClaim.count({ where: { companyId: existing.companyId } });
+          await tx.supplierClaim.create({
+            data: {
+              companyId: existing.companyId,
+              grId: id,
+              supplierId: existing.purchaseOrder.supplierId,
+              claimNumber: `CLM-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`,
+              status: "open",
+              reason: "Auto-generated: goods receipt has item(s) marked defect/partial during QC inspection.",
+              createdBy: user?.id || null,
+            },
+          });
+        }
+      }
+
+      return updated;
     });
 
     return NextResponse.json(goodsReceipt);
@@ -84,28 +155,31 @@ export async function DELETE(
       const gr = await tx.goodsReceipt.findUnique({ where: { id }, include: { items: true } });
       if (!gr) throw new Error("Goods receipt not found");
 
-      for (const item of gr.items) {
-        if (item.poItemId) {
-          await tx.purchaseOrderItem.update({
-            where: { id: item.poItemId },
-            data: { receivedQty: { decrement: Number(item.quantity) } },
-          });
-        }
-
-        if (gr.warehouseId && item.productId) {
-          const stock = await tx.stock.findFirst({
-            where: { warehouseId: gr.warehouseId, productId: item.productId, locationId: null },
-          });
-          if (stock) {
-            await tx.stock.update({
-              where: { id: stock.id },
-              data: { quantity: { decrement: Number(item.quantity) } },
+      // An unconfirmed auto-draft never touched stock/receivedQty, so there's nothing to reverse.
+      if (gr.stockApplied) {
+        for (const item of gr.items) {
+          if (item.poItemId) {
+            await tx.purchaseOrderItem.update({
+              where: { id: item.poItemId },
+              data: { receivedQty: { decrement: Number(item.quantity) } },
             });
           }
-        }
-      }
 
-      await tx.stockMovement.deleteMany({ where: { referenceType: "GoodsReceipt", referenceId: gr.id } });
+          if (gr.warehouseId && item.productId) {
+            const stock = await tx.stock.findFirst({
+              where: { warehouseId: gr.warehouseId, productId: item.productId, locationId: null },
+            });
+            if (stock) {
+              await tx.stock.update({
+                where: { id: stock.id },
+                data: { quantity: { decrement: Number(item.quantity) } },
+              });
+            }
+          }
+        }
+
+        await tx.stockMovement.deleteMany({ where: { referenceType: "GoodsReceipt", referenceId: gr.id } });
+      }
 
       const poItems = await tx.purchaseOrderItem.findMany({ where: { poId: gr.poId } });
       const allReceived = poItems.every((i) => Number(i.receivedQty) >= Number(i.quantity));

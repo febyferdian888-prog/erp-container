@@ -9,7 +9,7 @@ import { assertReferenceAccess } from "@/lib/company-access";
 
 const TYPE_AREA: Record<string, Area[]> = {
   RFQ: ["sales"], Quotation: ["sales"], SalesOrder: ["sales"], Delivery: ["sales"],
-  Invoice: ["finance"], Payment: ["finance"],
+  Invoice: ["finance"], Payment: ["finance"], PaymentReport: ["sales", "finance"],
   PurchaseRequest: ["purchasing"], PurchaseOrder: ["purchasing"], GoodsReceipt: ["purchasing"], PriceInquiry: ["purchasing"],
   Bill: ["finance", "purchasing"], Project: ["operational"], WorkOrder: ["operational"],
 };

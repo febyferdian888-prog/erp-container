@@ -52,6 +52,34 @@ async function currentUserId(): Promise<string | null> {
   }
 }
 
+// Field names, in priority order, that a model might carry naming who wrote the row.
+const ACTOR_FIELDS = ["createdBy", "requestedBy", "reportedBy", "inspectedByName"];
+
+function looksLikeEmail(s: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+// No browser session (an import script, a batch backfill) — fall back to
+// whatever the row itself says about who wrote it, resolving a real userId
+// when that value is an email matching an actual account, so as much history
+// as possible is a real person rather than an anonymous "Sistem" (Tahap 8 audit).
+async function resolveFallbackActor(
+  client: PrismaClient,
+  after: Record<string, unknown> | null,
+  before: Record<string, unknown> | null
+): Promise<{ userId: string | null; actorLabel: string | null }> {
+  for (const field of ACTOR_FIELDS) {
+    const raw = (after?.[field] ?? before?.[field]) as unknown;
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    if (looksLikeEmail(raw)) {
+      const user = await client.user.findUnique({ where: { email: raw }, select: { id: true } }).catch(() => null);
+      if (user) return { userId: user.id, actorLabel: null };
+    }
+    return { userId: null, actorLabel: raw };
+  }
+  return { userId: null, actorLabel: null };
+}
+
 export function installAudit(client: PrismaClient) {
   const flagged = client as unknown as { __auditInstalled?: boolean };
   if (flagged.__auditInstalled) return;
@@ -115,10 +143,17 @@ export function installAudit(client: PrismaClient) {
       }
 
       const label = labelOf(result) || labelOf(before);
-      const userId = await currentUserId();
+      let userId = await currentUserId();
+      let actorLabel: string | null = null;
+      if (!userId) {
+        const fallback = await resolveFallbackActor(client, after, oldSnap);
+        userId = fallback.userId;
+        actorLabel = fallback.actorLabel;
+      }
       await client.auditLog.create({
         data: {
           userId,
+          actorLabel,
           entityType: model,
           entityId: String((result as { id?: string } | null)?.id ?? params.args?.where?.id ?? ""),
           action,

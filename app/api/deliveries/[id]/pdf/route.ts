@@ -23,6 +23,7 @@ export async function GET(
       include: {
         company: true,
         customer: true,
+        salesOrder: { select: { poNumber: true } },
         items: { orderBy: { lineNumber: "asc" } },
       },
     });
@@ -41,20 +42,20 @@ export async function GET(
     const data: DeliveryPdfData = {
       deliveryNumber: delivery.deliveryNumber,
       deliveryDate: delivery.deliveryDate.toISOString(),
+      poReference: delivery.salesOrder?.poNumber ?? null,
       vehicleNumber: delivery.vehicleNumber,
       driverName: delivery.driverName,
       shippingAddress: delivery.shippingAddress,
+      shipmentByName: delivery.shipmentByName,
+      acknowledgedByName: delivery.acknowledgedByName,
+      receivedByName: delivery.receivedByName,
       notes: delivery.notes,
       company: {
         name: delivery.company.name,
-        description: delivery.company.description,
         address: delivery.company.address,
         city: delivery.company.city,
         province: delivery.company.province,
         postalCode: delivery.company.postalCode,
-        phone: delivery.company.phone,
-        email: delivery.company.email,
-        npwp: delivery.company.npwp,
       },
       customer: {
         name: delivery.customer.name,

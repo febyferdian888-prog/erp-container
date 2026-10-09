@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DocumentHeader, StatusLabel } from "@/components/ui/document-form";
 import { Attachments } from "@/components/attachments";
+import { PartNumberField } from "@/components/part-number-field";
 import {
   ArrowLeft,
   Plus,
@@ -92,6 +93,8 @@ function SectionCard({
 
 export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const prefillQuotationId = searchParams.get("quotationId");
   const { status } = useSession();
   const [loading, setLoading] = useState(!!soId);
   const [submitting, setSubmitting] = useState(false);
@@ -102,9 +105,10 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
   const [soNumber, setSoNumber] = useState("");
   const [linked, setLinked] = useState<{
     quotation?: { number: string } | null;
-    deliveries: { deliveryNumber: string }[];
-    invoices: { invoiceNumber: string }[];
+    deliveries: { deliveryNumber: string; status?: string }[];
+    invoices: { invoiceNumber: string; status?: string }[];
   } | null>(null);
+  const [progress, setProgress] = useState<{ label: string; tone: string } | null>(null);
   const [items, setItems] = useState<LineItem[]>([
     { lineNumber: 1, partNumber: "", description: "", quantity: 0, unit: "pcs", unitPrice: 0, subtotal: 0, notes: "" },
   ]);
@@ -126,6 +130,9 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
         fetchSalesOrder();
       } else {
         setLoading(false);
+        if (prefillQuotationId) {
+          handleQuotationPick(prefillQuotationId);
+        }
       }
     }
   }, [status]);
@@ -157,6 +164,7 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
       if (res.ok) {
         const data = await res.json();
         setSoNumber(data.soNumber);
+        setProgress(data.progress || null);
         setLinked({
           quotation: data.quotation,
           deliveries: data.deliveries || [],
@@ -251,6 +259,45 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
 
   const selectedCustomer = customers.find((c) => c.id === formData.customerId);
 
+  const closeNonPkp = async () => {
+    if (
+      !window.confirm(
+        "Tandai order ini selesai tanpa surat jalan/invoice? Gunakan ini hanya untuk pelanggan non-PKP yang sudah membayar penuh di luar alur dokumen normal."
+      )
+    ) {
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/sales-orders/${soId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyId,
+          ...formData,
+          status: "invoiced",
+          items: items.map((item) => ({
+            partNumber: item.partNumber,
+            description: item.description,
+            quantity: item.quantity,
+            unit: item.unit,
+            unitPrice: item.unitPrice,
+            notes: item.notes,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Gagal menandai order selesai");
+      }
+      router.push("/sales/orders");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menandai order selesai");
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
@@ -288,6 +335,11 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
         throw new Error(data.error || "Failed to save sales order");
       }
 
+      if (!soId) {
+        const created = await res.json();
+        router.push(`/sales/orders/${created.id}`);
+        return;
+      }
       router.push("/sales/orders");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error saving sales order");
@@ -295,6 +347,9 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
       setSubmitting(false);
     }
   };
+
+  const hasActiveDelivery = !!linked?.deliveries.some((d) => d.status !== "cancelled");
+  const hasActiveInvoice = !!linked?.invoices.some((i) => i.status !== "cancelled");
 
   if (loading) {
     return <div className="text-center py-8">Loading...</div>;
@@ -317,7 +372,7 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
           eyebrow="Sales Order"
           title={soId ? soNumber : "New Sales Order"}
           gradient="indigo"
-          badge={soId && <StatusLabel label={formData.status.replace(/_/g, " ")} tone={STATUS_TONE[formData.status] || "slate"} />}
+          badge={soId && <StatusLabel label={progress?.label || formData.status.replace(/_/g, " ")} tone={progress ? (progress.tone === "indigo" ? "blue" : (progress.tone as "slate" | "green" | "amber" | "red" | "blue")) : STATUS_TONE[formData.status] || "slate"} />}
           actions={
             <Button type="submit" disabled={submitting}>
               {submitting ? "Saving..." : soId ? "Update Order" : "Confirm Order"}
@@ -389,6 +444,11 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
                     required
                     className="rounded-lg"
                   />
+                  {!soId && (
+                    <p className="text-xs text-slate-400">
+                      Setelah disimpan, Anda diarahkan ke halaman order ini untuk mengunggah screenshot/file PO customer.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -423,7 +483,7 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
                 {soId && (
                   <div className="space-y-1.5">
                     <Label htmlFor="status" className="text-xs text-slate-500">
-                      Order Status
+                      Order Status (dokumen)
                     </Label>
                     <select
                       id="status"
@@ -438,6 +498,9 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
                         </option>
                       ))}
                     </select>
+                    <p className="text-[11px] text-slate-400">
+                      Beda dari progres di atas: ini status dokumen (dipakai untuk Batalkan atau tandai selesai manual), bukan tahapan pengerjaan aktual.
+                    </p>
                   </div>
                 )}
 
@@ -481,9 +544,9 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
                     {items.map((item, index) => (
                       <tr key={index} className="border-b border-slate-100 hover:bg-slate-50/60">
                         <td className="px-2 py-1.5">
-                          <Input
+                          <PartNumberField
                             value={item.partNumber}
-                            onChange={(e) => handleItemChange(index, "partNumber", e.target.value)}
+                            onChange={(v) => handleItemChange(index, "partNumber", v)}
                             placeholder="-"
                             className="border-0 shadow-none focus-visible:ring-1"
                           />
@@ -626,12 +689,38 @@ export function SalesOrderForm({ soId, companyId }: SalesOrderFormProps) {
         <div className="flex gap-3 justify-end mt-6">
           {soId && (
           <>
-            <Button type="button" variant="outline" onClick={() => router.push(`/sales/delivery/new?soId=${soId}`)} className="rounded-lg">
-              Create Surat Jalan
+            <Button
+              type="button"
+              variant="outline"
+              disabled={hasActiveDelivery || formData.status === "cancelled"}
+              title={hasActiveDelivery ? "Surat jalan sudah dibuat untuk order ini" : undefined}
+              onClick={() => router.push(`/sales/delivery/new?soId=${soId}`)}
+              className="rounded-lg"
+            >
+              {hasActiveDelivery ? "Surat Jalan sudah dibuat" : "Create Surat Jalan"}
             </Button>
-            <Button type="button" variant="outline" onClick={() => router.push(`/finance/invoices/new?soId=${soId}`)} className="rounded-lg">
-              Create Invoice
+            <Button
+              type="button"
+              variant="outline"
+              disabled={hasActiveInvoice || formData.status === "cancelled"}
+              title={hasActiveInvoice ? "Invoice sudah dibuat untuk order ini" : undefined}
+              onClick={() => router.push(`/finance/invoices/new?soId=${soId}`)}
+              className="rounded-lg"
+            >
+              {hasActiveInvoice ? "Invoice sudah dibuat" : "Create Invoice"}
             </Button>
+            {!linked?.deliveries.length && !linked?.invoices.length && formData.status !== "invoiced" && formData.status !== "cancelled" && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeNonPkp}
+                disabled={submitting}
+                className="rounded-lg border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                title="Untuk pelanggan non-PKP yang sudah dibayar tanpa surat jalan/invoice"
+              >
+                Tandai Selesai (Non-PKP)
+              </Button>
+            )}
           </>
         )}
         <Button type="button" variant="outline" onClick={() => router.push("/sales/orders")} className="rounded-lg">

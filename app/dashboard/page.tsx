@@ -7,6 +7,7 @@ import Link from "next/link";
 import { DashboardLayout } from "@/components/dashboard-layout";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { SalesPerformance } from "@/components/sales-performance";
 import { Plus, ShoppingCart, AlertTriangle, Truck, Wrench, RotateCw, ArrowUpRight, AlertCircle } from "lucide-react";
 
 interface FollowUpRow {
@@ -29,10 +30,22 @@ interface DashboardData {
     pendingDeliveries: { count: number };
     activeWork: { count: number };
   };
-  finance: { receivablesOutstanding: number; payablesOutstanding: number };
+  finance: { receivablesOutstanding: number; payablesOutstanding: number; draftInvoices?: { count: number; value: number } };
   hr: { pendingLeaves: number; pendingReimbursements: number };
   followUp: { sales: FollowUpRow[]; deliveries: FollowUpRow[]; payments: FollowUpRow[] };
   multiCompany: boolean;
+  director: {
+    pendingApprovals: { id: string; documentLabel: string | null; referenceType: string; amount: number; requestedBy: string | null }[];
+    pendingApprovalsCount: number;
+    overdueFollowUps: { id: string; number: string; customer: string; nextFollowUpAt: string }[];
+    overdueFollowUpsCount: number;
+    atRiskProjects: { id: string; projectNumber: string; projectName: string; margin: number | null; overBudget: number }[];
+    atRiskProjectsCount: number;
+    pipeline: { weightedValue: number; openCount: number };
+    apDueSoon: { id: string; number: string; supplier: string; dueDate: string; value: number }[];
+    apDueSoonCount: number;
+    apDueSoonValue: number;
+  };
 }
 
 const rupiah = (value: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
@@ -197,18 +210,80 @@ function DashboardOverview() {
 
       <section className="overview-metrics" aria-label="Ringkasan yang perlu ditindaklanjuti" aria-busy={loading}>
         {[
-          { icon: ShoppingCart, label: "Pesanan aktif", value: data?.summary.activeOrders.count, detail: !loading && data ? amount(data.summary.activeOrders.value) : "Belum diproses", href: "/sales/orders" },
-          { icon: AlertTriangle, label: "Piutang jatuh tempo", value: data?.summary.overdueReceivables.count, detail: !loading && data ? amount(data.summary.overdueReceivables.value) : "Belum diproses", href: "/finance/invoices" },
-          { icon: Truck, label: "Pengiriman tertunda", value: data?.summary.pendingDeliveries.count, detail: "Lewat jadwal, belum selesai", href: "/sales/delivery" },
-          { icon: Wrench, label: "Pekerjaan berjalan", value: data?.summary.activeWork.count, detail: "Proyek sedang berlangsung", href: "/operational/projects" },
+          { icon: ShoppingCart, label: "Pesanan aktif", value: data?.summary.activeOrders.count, detail: !loading && data ? amount(data.summary.activeOrders.value) : "Belum diproses", href: "/sales/orders?status=active", hint: "Pesanan dikonfirmasi yang belum ditagih sama sekali (confirmed, partially_delivered, delivered)." },
+          { icon: AlertTriangle, label: "Piutang jatuh tempo", value: data?.summary.overdueReceivables.count, detail: !loading && data ? amount(data.summary.overdueReceivables.value) : "Belum diproses", href: "/finance/collections?state=overdue", hint: "Invoice dengan saldo belum lunas dan tanggal jatuh tempo sudah lewat, dihitung dari saldo nyata, bukan status tersimpan." },
+          { icon: Truck, label: "Pengiriman tertunda", value: data?.summary.pendingDeliveries.count, detail: "Lewat jadwal, belum selesai", href: "/sales/delivery", hint: "Surat jalan berstatus draft atau dalam perjalanan yang tanggal kirimnya sudah lewat." },
+          { icon: Wrench, label: "Pekerjaan berjalan", value: data?.summary.activeWork.count, detail: "Proyek sedang berlangsung", href: "/operational/projects", hint: "Proyek berstatus in_progress atau on_hold." },
         ].map((metric) => (
-          <Link href={metric.href} className="overview-metric" key={metric.label}>
+          <Link href={metric.href} className="overview-metric" key={metric.label} title={metric.hint}>
             <span>{metric.label}</span>
             <strong>{error ? "N/A" : loading ? <Skeleton className="h-8 w-14 inline-block align-middle" /> : count(metric.value)}</strong>
             <small>{error ? "Data belum tersedia" : metric.detail}</small>
           </Link>
         ))}
       </section>
+
+      <SalesPerformance companyId={companyParam || undefined} />
+
+      {!loading && data && (data.director.pendingApprovalsCount > 0 || data.director.overdueFollowUpsCount > 0 || data.director.atRiskProjectsCount > 0 || data.director.apDueSoonCount > 0) && (
+        <section className="overview-documents mb-6" aria-label="Prioritas direktur">
+          <div className="overview-section-heading"><div><h2>Perlu perhatian direktur</h2><p>Setiap butir bisa ditelusuri ke dokumen sumbernya.</p></div></div>
+          <div className="grid md:grid-cols-2 gap-4">
+            {data.director.pendingApprovalsCount > 0 && (
+              <div className="border rounded-lg p-3" style={{ borderColor: "#E4E7EC" }}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--neutral-500)]">Approval tertunda ({data.director.pendingApprovalsCount})</p>
+                  <Link href="/approvals" className="erp-text-link" style={{ minHeight: "auto" }}>Buka <ArrowUpRight size={13} /></Link>
+                </div>
+                {data.director.pendingApprovals.slice(0, 3).map((a) => (
+                  <div key={a.id} className="text-sm flex justify-between py-1">
+                    <span>{a.referenceType} {a.documentLabel}</span>
+                    <span className="text-[var(--neutral-500)]">{a.requestedBy || "-"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {data.director.overdueFollowUpsCount > 0 && (
+              <div className="border rounded-lg p-3" style={{ borderColor: "#E4E7EC" }}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--neutral-500)]">Follow-up lewat tenggat ({data.director.overdueFollowUpsCount})</p>
+                  <Link href="/finance/collections" className="erp-text-link" style={{ minHeight: "auto" }}>Buka <ArrowUpRight size={13} /></Link>
+                </div>
+                {data.director.overdueFollowUps.slice(0, 3).map((f) => (
+                  <div key={f.id} className="text-sm flex justify-between py-1">
+                    <span>{f.number} — {f.customer}</span>
+                    <span style={{ color: "var(--status-danger-fg)" }}>{tanggal(f.nextFollowUpAt)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {data.director.atRiskProjectsCount > 0 && (
+              <div className="border rounded-lg p-3" style={{ borderColor: "#E4E7EC" }}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--neutral-500)]">Proyek berisiko ({data.director.atRiskProjectsCount})</p>
+                  <Link href="/operational/projects" className="erp-text-link" style={{ minHeight: "auto" }}>Buka <ArrowUpRight size={13} /></Link>
+                </div>
+                {data.director.atRiskProjects.slice(0, 3).map((p) => (
+                  <Link key={p.id} href={`/operational/projects/${p.id}`} className="text-sm flex justify-between py-1">
+                    <span>{p.projectNumber}</span>
+                    <span style={{ color: "var(--status-danger-fg)" }}>{p.margin !== null && p.margin < 0 ? `Margin ${rupiah(p.margin)}` : `Lebih anggaran ${rupiah(p.overBudget)}`}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+            {data.director.apDueSoonCount > 0 && (
+              <div className="border rounded-lg p-3" style={{ borderColor: "#E4E7EC" }}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--neutral-500)]">Utang jatuh tempo &lt;7 hari ({data.director.apDueSoonCount})</p>
+                  <Link href="/supply-chain/bills" className="erp-text-link" style={{ minHeight: "auto" }}>Buka <ArrowUpRight size={13} /></Link>
+                </div>
+                <p className="text-sm">Total {rupiah(data.director.apDueSoonValue)}</p>
+              </div>
+            )}
+          </div>
+          <p className="text-[11px] text-[var(--neutral-500)] mt-3">Pipeline terbuka: {data.director.pipeline.openCount} peluang, nilai tertimbang {rupiah(data.director.pipeline.weightedValue)} — <Link href="/sales/pipeline" className="erp-text-link" style={{ minHeight: "auto", display: "inline" }}>lihat pipeline</Link></p>
+        </section>
+      )}
 
       <div className="overview-body">
         <section className="overview-documents">
@@ -276,7 +351,7 @@ function DashboardOverview() {
               </table>
               {data && data.followUp[tab].length >= 8 && (
                 <div className="pt-3">
-                  <Link href={tab === "sales" ? "/sales/orders" : tab === "deliveries" ? "/sales/delivery" : "/finance/invoices"} className="erp-text-link">Lihat semua <ArrowUpRight size={15} /></Link>
+                  <Link href={tab === "sales" ? "/sales/orders?status=active" : tab === "deliveries" ? "/sales/delivery" : "/finance/collections?state=overdue"} className="erp-text-link">Lihat semua <ArrowUpRight size={15} /></Link>
                 </div>
               )}
             </div>
@@ -288,7 +363,12 @@ function DashboardOverview() {
           <Link href="/finance/invoices" className="finance-amount finance-amount--attention">
             <span>Piutang pelanggan</span>
             <strong>{amount(data?.finance.receivablesOutstanding)}</strong>
-            <small>Seluruh invoice yang belum lunas</small>
+            <small>
+              Invoice yang sudah terkirim &amp; belum lunas
+              {data?.finance.draftInvoices && data.finance.draftInvoices.count > 0
+                ? ` — belum termasuk ${data.finance.draftInvoices.count} invoice draft (${amount(data.finance.draftInvoices.value)}), belum tercatat sebagai piutang`
+                : ""}
+            </small>
           </Link>
           <Link href="/supply-chain/bills" className="finance-amount">
             <span>Utang supplier</span>

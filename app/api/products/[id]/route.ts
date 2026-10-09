@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { guard } from "@/lib/rbac";
+import { pick } from "@/lib/pick";
 
 export async function GET(
   req: NextRequest,
@@ -53,7 +54,7 @@ export async function PUT(
     const body = await req.json();
     const updated = await prisma.product.update({
       where: { id },
-      data: body,
+      data: pick(body, ["categoryId","sku","name","description","unitId","standardPrice","itemType","isActive"]),
       include: { unit: true, category: true },
     });
 

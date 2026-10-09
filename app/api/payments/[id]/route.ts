@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { recalcInvoiceStatus } from "@/lib/workflow";
+import { syncJournal } from "@/lib/accounting";
 import { guard } from "@/lib/rbac";
 import { referenceCompanyId, userHasCompanyAccess } from "@/lib/company-access";
 
@@ -62,6 +63,12 @@ export async function PUT(
 
     const body = await req.json();
     const { paymentDate, ...rest } = body;
+    if (rest.amount !== undefined && (!Number.isFinite(Number(rest.amount)) || Number(rest.amount) <= 0)) {
+      return NextResponse.json({ error: "Jumlah pembayaran harus lebih dari 0" }, { status: 400 });
+    }
+    if (paymentDate !== undefined && Number.isNaN(new Date(paymentDate).getTime())) {
+      return NextResponse.json({ error: "Tanggal pembayaran tidak valid" }, { status: 400 });
+    }
     const nextReferenceType = rest.referenceType ?? payment.referenceType;
     const nextReferenceId = rest.referenceId ?? payment.referenceId;
     if (nextReferenceType || nextReferenceId) {
@@ -131,17 +138,25 @@ export async function DELETE(
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
-    if (payment.referenceType === "Invoice" && payment.referenceId) {
-      await prisma.invoice.update({
-        where: { id: payment.referenceId },
-        data: { paidAmount: { decrement: payment.amount } },
-      });
-    }
+    const hasInvoiceRef = payment.referenceType === "Invoice" && !!payment.referenceId;
 
-    await prisma.payment.delete({ where: { id } });
-    if (payment.referenceType === "Invoice" && payment.referenceId) {
-      await recalcInvoiceStatus(prisma, payment.referenceId);
+    await prisma.$transaction(async (tx) => {
+      if (hasInvoiceRef) {
+        await tx.invoice.update({
+          where: { id: payment.referenceId as string },
+          data: { paidAmount: { decrement: payment.amount } },
+        });
+      }
+      await tx.payment.delete({ where: { id } });
+    });
+
+    // Outside the transaction: the accounting-sync middleware skips writes made
+    // mid-transaction (row isn't committed yet), so the journal and status
+    // recalculation are done explicitly here once the delete has committed.
+    if (hasInvoiceRef) {
+      await recalcInvoiceStatus(prisma, payment.referenceId as string);
     }
+    await syncJournal(prisma, "Payment", id);
 
     return NextResponse.json({ success: true });
   } catch (error) {

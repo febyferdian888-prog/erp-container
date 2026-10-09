@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { guard } from "@/lib/rbac";
+import { findUnregisteredParts, unregisteredMessage } from "@/lib/part-registry";
+import { formatMdaQuotationNumber, nextQuotationSequence } from "@/lib/document-number";
 
 export async function GET(req: NextRequest) {
   try {
@@ -64,6 +66,7 @@ export async function POST(req: NextRequest) {
     const {
       companyId,
       customerId,
+      rfqId,
       number,
       quotationDate,
       expiryDate,
@@ -84,19 +87,42 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
 
-    const existing = await prisma.quotation.findUnique({
-      where: { companyId_number: { companyId, number } },
-    });
+    {
+      const missing = await findUnregisteredParts(prisma, companyId, items || []);
+      if (missing.length) {
+        return NextResponse.json({ error: unregisteredMessage(missing), code: "PART_NOT_REGISTERED", missing }, { status: 400 });
+      }
+    }
 
-    if (existing) {
-      return NextResponse.json({ error: "Quotation number already exists" }, { status: 400 });
+    let quotationNumber = number;
+    if (!quotationNumber) {
+      const qDate = new Date(quotationDate);
+      const existingNumbers = (
+        await prisma.quotation.findMany({ where: { companyId }, select: { number: true } })
+      ).map((q) => q.number);
+      quotationNumber = formatMdaQuotationNumber(nextQuotationSequence(existingNumbers, qDate), qDate);
+    } else {
+      const existing = await prisma.quotation.findUnique({
+        where: { companyId_number: { companyId, number: quotationNumber } },
+      });
+      if (existing) {
+        return NextResponse.json({ error: "Quotation number already exists" }, { status: 400 });
+      }
+    }
+
+    if (rfqId) {
+      const rfq = await prisma.rFQ.findUnique({ where: { id: rfqId }, select: { companyId: true } });
+      if (!rfq || rfq.companyId !== companyId) {
+        return NextResponse.json({ error: "RFQ tidak ditemukan untuk perusahaan ini" }, { status: 400 });
+      }
     }
 
     const quotation = await prisma.quotation.create({
       data: {
         companyId,
         customerId,
-        number,
+        rfqId: rfqId || null,
+        number: quotationNumber,
         quotationDate: new Date(quotationDate),
         expiryDate: new Date(expiryDate),
         paymentTerms,
@@ -112,6 +138,7 @@ export async function POST(req: NextRequest) {
             lineNumber: item.lineNumber,
             partNumber: item.partNumber,
             description: item.description,
+            specification: item.specification,
             quantity: item.quantity,
             unit: item.unit,
             unitPrice: item.unitPrice,
@@ -122,6 +149,10 @@ export async function POST(req: NextRequest) {
       },
       include: { customer: true, items: true },
     });
+
+    if (rfqId) {
+      await prisma.rFQ.update({ where: { id: rfqId }, data: { status: "quoted" } }).catch(() => {});
+    }
 
     return NextResponse.json(quotation, { status: 201 });
   } catch (error) {

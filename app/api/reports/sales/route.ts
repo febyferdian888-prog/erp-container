@@ -46,14 +46,20 @@ export async function GET() {
         where: { ...live, status: { not: "cancelled" } },
         select: {
           id: true, invoiceNumber: true, invoiceDate: true, dueDate: true, status: true,
-          grandTotal: true, paidAmount: true, soId: true,
+          grandTotal: true, totalAmount: true, taxAmount: true, paidAmount: true, soId: true,
           items: { orderBy: { lineNumber: "asc" }, select: { lineNumber: true, partNumber: true, description: true, quantity: true, unit: true, unitPrice: true, subtotal: true } },
           customer: { select: { id: true, name: true } },
         },
       }),
       prisma.purchaseOrder.findMany({
         where: { ...live, status: { not: "cancelled" }, soId: { not: null } },
-        select: { id: true, soId: true, items: { select: { subtotal: true } } },
+        select: {
+          id: true, soId: true, status: true, items: { select: { subtotal: true } },
+          // A "PO gabungan" can cover several Sales Orders at once (Temuan 6
+          // feature); soId above only ever holds the FIRST one, so the full
+          // set is read from here to split cost across all of them (Tahap 7 audit).
+          sources: { select: { soId: true, salesOrder: { select: { items: { select: { subtotal: true } } } } } },
+        },
       }),
       prisma.bill.findMany({
         where: { ...live, status: { not: "cancelled" } },
@@ -76,15 +82,15 @@ export async function GET() {
     const funnel = [
       { key: "rfq", label: "RFQ diterima", count: rfqs.length, value: null as number | null },
       { key: "quotation", label: "Quotation dikirim", count: quotations.length, value: quotations.reduce((s, q) => s + sum(q.items), 0) },
-      { key: "so", label: "Sales Order (PO customer)", count: activeSo.length, value: activeSo.reduce((s, o) => s + soValue(o), 0) },
-      { key: "delivered", label: "Sudah dikirim", count: activeSo.filter((s) => s.deliveries.length > 0).length, value: activeSo.filter((s) => s.deliveries.length > 0).reduce((s, o) => s + soValue(o), 0) },
-      { key: "invoiced", label: "Sudah ditagih", count: invoices.length, value: invoices.reduce((s, i) => s + Number(i.grandTotal), 0) },
-      { key: "paid", label: "Sudah dibayar lunas", count: paidInvoices.length, value: paidInvoices.reduce((s, i) => s + Number(i.grandTotal), 0) },
+      { key: "so", label: "Sales Order (PO customer, sebelum PPN)", count: activeSo.length, value: activeSo.reduce((s, o) => s + soValue(o), 0) },
+      { key: "delivered", label: "Sudah dikirim (nilai SO sebelum PPN)", count: activeSo.filter((s) => s.deliveries.length > 0).length, value: activeSo.filter((s) => s.deliveries.length > 0).reduce((s, o) => s + soValue(o), 0) },
+      { key: "invoiced", label: "Sudah ditagih (termasuk PPN)", count: invoices.length, value: invoices.reduce((s, i) => s + Number(i.grandTotal), 0) },
+      { key: "paid", label: "Sudah dibayar lunas (termasuk PPN)", count: paidInvoices.length, value: paidInvoices.reduce((s, i) => s + Number(i.grandTotal), 0) },
     ];
 
-    const byCustomer = new Map<string, { name: string; soCount: number; soValue: number; invoiced: number; paid: number }>();
+    const byCustomer = new Map<string, { name: string; soCount: number; soValue: number; invoicedNet: number; invoicedTax: number; invoiced: number; paid: number }>();
     const row = (id: string, name: string) => {
-      if (!byCustomer.has(id)) byCustomer.set(id, { name, soCount: 0, soValue: 0, invoiced: 0, paid: 0 });
+      if (!byCustomer.has(id)) byCustomer.set(id, { name, soCount: 0, soValue: 0, invoicedNet: 0, invoicedTax: 0, invoiced: 0, paid: 0 });
       return byCustomer.get(id)!;
     };
     for (const s of activeSo) {
@@ -94,6 +100,8 @@ export async function GET() {
     }
     for (const i of invoices) {
       const r = row(i.customer.id, i.customer.name);
+      r.invoicedNet += Number(i.totalAmount);
+      r.invoicedTax += Number(i.taxAmount);
       r.invoiced += Number(i.grandTotal);
       r.paid += Number(i.paidAmount);
     }
@@ -104,10 +112,10 @@ export async function GET() {
       .sort((a, b) => a.requestDate.getTime() - b.requestDate.getTime())
       .map((r) => ({ id: r.id, number: r.number, customer: r.customer.name, date: r.requestDate }));
     const notDelivered = activeSo
-      .filter((s) => s.deliveries.length === 0 && !invoicedSoIds.has(s.id))
+      .filter((s) => s.deliveries.length === 0 && !invoicedSoIds.has(s.id) && s.status !== "invoiced" && s.status !== "delivered")
       .map((s) => ({ id: s.id, soNumber: s.soNumber, poNumber: s.poNumber, customer: s.customer.name, value: soValue(s), date: s.poDate }));
     const notInvoiced = activeSo
-      .filter((s) => s.deliveries.length > 0 && !invoicedSoIds.has(s.id))
+      .filter((s) => s.deliveries.length > 0 && !invoicedSoIds.has(s.id) && s.status !== "invoiced")
       .map((s) => ({ id: s.id, soNumber: s.soNumber, poNumber: s.poNumber, customer: s.customer.name, value: soValue(s), date: s.poDate }));
 
     // ---- Aging (piutang dan utang) ----
@@ -181,45 +189,80 @@ export async function GET() {
     );
 
     // ---- Margin per SO ----
-    // Cost per SO: for each PO, the vendor bills booked against it (actual) or, when none, the PO value;
-    // plus bills tied straight to the SO without a PO.
+    // Cost per SO, kept in three separate buckets so a margin is never presented
+    // as more certain than it is (Tahap 7 audit):
+    //   actual    — real vendor bills (booked, invoiced by the vendor)
+    //   committed — a PO's own item value, only once it has left draft (sent/
+    //               confirmed/received) and has no bill yet — a real commitment,
+    //               just not invoiced
+    //   draftOnly — a PO still in draft: not yet sent to any vendor, so not a
+    //               commitment at all. Tracked but NEVER added into `cost` or
+    //               `margin` below.
+    // A PO combining several Sales Orders ("PO gabungan") splits its value
+    // across them in proportion to each SO's own revenue — an estimate, not an
+    // exact allocation, since the PO doesn't record which line belongs to which
+    // SO; flagged via `costIsAllocated`.
     const activeBills = bills.filter((bl) => bl.status !== "draft");
-    const costBySo = new Map<string, { cost: number; poCount: number; billCount: number }>();
-    const addCost = (soId: string, cost: number, po: number, bill: number) => {
-      const c = costBySo.get(soId) ?? { cost: 0, poCount: 0, billCount: 0 };
-      c.cost += cost;
-      c.poCount += po;
-      c.billCount += bill;
-      costBySo.set(soId, c);
+    type CostBucket = { actual: number; committed: number; draftOnly: number; poCount: number; billCount: number; allocated: boolean };
+    const costBySo = new Map<string, CostBucket>();
+    const bucket = (soId: string) => {
+      let c = costBySo.get(soId);
+      if (!c) { c = { actual: 0, committed: 0, draftOnly: 0, poCount: 0, billCount: 0, allocated: false }; costBySo.set(soId, c); }
+      return c;
     };
     const poSo = new Map(purchaseOrders.map((p) => [p.id, p.soId as string]));
+
     for (const po of purchaseOrders) {
       const poBills = activeBills.filter((bl) => bl.poId === po.id);
-      if (poBills.length) addCost(po.soId as string, poBills.reduce((t, bl) => t + Number(bl.totalAmount), 0), 1, poBills.length);
-      else addCost(po.soId as string, sum(po.items), 1, 0);
+      const poValue = sum(po.items);
+      const billedValue = poBills.reduce((t, bl) => t + Number(bl.totalAmount), 0);
+      // Every SO this PO covers, weighted by that SO's own revenue (falls back
+      // to an even split if none of the covered SOs carry a value).
+      const covered = po.sources.length ? po.sources : [{ soId: po.soId as string, salesOrder: { items: [] as { subtotal: unknown }[] } }];
+      const weights = covered.map((c) => Math.max(sum(c.salesOrder.items), 0));
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      covered.forEach((c, i) => {
+        if (!c.soId) return;
+        const share = totalWeight > 0 ? weights[i] / totalWeight : 1 / covered.length;
+        const b = bucket(c.soId);
+        if (covered.length > 1) b.allocated = true;
+        if (poBills.length) { b.actual += billedValue * share; b.billCount += poBills.length / covered.length; }
+        else if (po.status === "draft") { b.draftOnly += poValue * share; }
+        else { b.committed += poValue * share; }
+        b.poCount += 1 / covered.length;
+      });
     }
     for (const bl of activeBills) {
-      if (bl.poId && poSo.has(bl.poId)) continue;
+      if (bl.poId && poSo.has(bl.poId)) continue; // already attributed above via its PO
       const perSo = new Map<string, number>();
       for (const it of bl.items) {
         const so = it.soId ?? bl.soId;
         if (so) perSo.set(so, (perSo.get(so) ?? 0) + Number(it.subtotal));
       }
-      for (const [so, cost] of perSo) addCost(so, cost, 0, 1);
+      for (const [so, cost] of perSo) { const b = bucket(so); b.actual += cost; b.billCount += 1; }
     }
+
     const marginRows = activeSo
       .map((s) => {
         const revenue = soValue(s);
         const c = costBySo.get(s.id);
+        // A draft-only PO is not a real cost (see comment above) — a SO whose
+        // only known cost is a draft estimate must show no margin, not a false
+        // 100% margin from treating that unconfirmed cost as zero.
+        const hasCost = !!c && (c.actual > 0 || c.committed > 0);
+        const cost = c ? c.actual + c.committed : null; // draftOnly deliberately excluded
         return {
           id: s.id, soNumber: s.soNumber, poNumber: s.poNumber, customer: s.customer.name, revenue,
-          cost: c ? c.cost : null, poCount: c?.poCount ?? 0, billCount: c?.billCount ?? 0,
-          margin: c ? revenue - c.cost : null,
-          marginPct: c && revenue > 0 ? ((revenue - c.cost) / revenue) * 100 : null,
+          cost, poCount: c?.poCount ?? 0, billCount: c?.billCount ?? 0,
+          costActual: c?.actual ?? 0, costCommitted: c?.committed ?? 0, costDraftOnly: c?.draftOnly ?? 0,
+          costIsAllocated: c?.allocated ?? false,
+          costIsFinal: !!c && c.actual > 0 && c.committed === 0, // fully billed, nothing left as a mere commitment
+          margin: hasCost ? revenue - (cost as number) : null,
+          marginPct: hasCost && revenue > 0 ? ((revenue - (cost as number)) / revenue) * 100 : null,
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-    const withCost = marginRows.filter((r) => r.cost !== null);
+    const withCost = marginRows.filter((r) => r.cost !== null && (r.costActual > 0 || r.costCommitted > 0));
 
     const access = await getAccess();
     const financeView = !!access && can(access.perms, ["finance"], "view");
@@ -236,8 +279,10 @@ export async function GET() {
             totalCount: marginRows.length,
             coveredRevenue: withCost.reduce((s, r) => s + r.revenue, 0),
             coveredCost: withCost.reduce((s, r) => s + (r.cost ?? 0), 0),
+            draftOnlyCount: marginRows.filter((r) => r.cost === null && r.costDraftOnly > 0).length,
+            allocatedCount: marginRows.filter((r) => r.costIsAllocated).length,
           }
-        : { rows: [], coveredCount: 0, totalCount: 0, coveredRevenue: 0, coveredCost: 0 },
+        : { rows: [], coveredCount: 0, totalCount: 0, coveredRevenue: 0, coveredCost: 0, draftOnlyCount: 0, allocatedCount: 0 },
     });
   } catch (error) {
     console.error("GET /api/reports/sales error:", error);

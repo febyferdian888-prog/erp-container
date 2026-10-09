@@ -23,8 +23,11 @@ export async function GET(req: NextRequest) {
 
     const companyIds = user.memberships.map((m: any) => m.companyId);
 
+    // Services (itemType "service") never carry physical stock — a "Jasa Instalasi"
+    // or "Delivery Cost" line has nothing to warehouse, so it is excluded here
+    // rather than shown with a stock quantity that means nothing (Tahap 6 audit).
     const stocks = await prisma.stock.findMany({
-      where: { warehouse: { companyId: { in: companyIds }, deletedAt: null } },
+      where: { warehouse: { companyId: { in: companyIds }, deletedAt: null }, product: { itemType: { not: "service" } } },
       include: {
         warehouse: { select: { id: true, code: true, name: true } },
         product: { select: { id: true, sku: true, name: true, unit: { select: { code: true } } } },

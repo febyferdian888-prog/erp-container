@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { DashboardLayout } from "@/components/dashboard-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, ClipboardList, FileText, ShoppingCart, Truck, ChevronRight } from "lucide-react";
+import { SalesBoard } from "@/components/sales-board";
+import { Users, ClipboardList, FileText, ShoppingCart, Truck, ChevronRight, TrendingUp } from "lucide-react";
 
 const sections = [
+  {
+    href: "/sales/pipeline",
+    icon: TrendingUp,
+    title: "Pipeline penjualan",
+    description: "Peluang terbuka dari RFQ dan penawaran, dengan probabilitas dan target closing",
+  },
   {
     href: "/sales/customers",
     icon: Users,
@@ -44,6 +51,8 @@ export default function SalesPage() {
           <h1 className="text-3xl font-bold text-slate-900">Sales</h1>
           <p className="text-slate-600 mt-1">Choose a section to manage</p>
         </div>
+
+        <SalesBoard />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {sections.map((section) => (

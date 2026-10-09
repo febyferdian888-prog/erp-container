@@ -41,6 +41,12 @@ export async function createPurchaseOrdersFromAward(inquiryId: string, userEmail
   });
   let seq = last ? parseInt(last.poNumber.slice(prefix.length), 10) || 0 : 0;
 
+  const soItemIds = pending.map((i) => i.soItemId).filter((v): v is string => !!v);
+  const soItemRows = soItemIds.length
+    ? await prisma.salesOrderItem.findMany({ where: { id: { in: soItemIds } }, select: { id: true, soId: true } })
+    : [];
+  const soOfItem = new Map(soItemRows.map((r) => [r.id, r.soId]));
+
   const products = await prisma.product.findMany({ where: { companyId: inquiry.companyId }, select: { id: true, sku: true } });
   const productBySku = new Map(products.map((p) => [p.sku.trim().toLowerCase(), p.id]));
 
@@ -55,6 +61,7 @@ export async function createPurchaseOrdersFromAward(inquiryId: string, userEmail
         data: {
           lineNumber: idx + 1,
           productId: item.partNumber ? productBySku.get(item.partNumber.trim().toLowerCase()) ?? null : null,
+          soItemId: item.soItemId && soOfItem.has(item.soItemId) ? item.soItemId : null,
           description: item.description,
           quantity: item.quantity,
           unit: item.unit,
@@ -64,11 +71,14 @@ export async function createPurchaseOrdersFromAward(inquiryId: string, userEmail
         },
       };
     });
+    const poSoIds = [...new Set(items.map((i) => (i.soItemId ? soOfItem.get(i.soItemId) : undefined)).filter((v): v is string => !!v))];
+    if (!poSoIds.length && inquiry.soId) poSoIds.push(inquiry.soId);
     const po = await prisma.purchaseOrder.create({
       data: {
         companyId: inquiry.companyId,
         supplierId,
-        soId: inquiry.soId,
+        soId: poSoIds[0] ?? inquiry.soId,
+        sources: { create: poSoIds.map((soId) => ({ soId })) },
         poNumber,
         poDate: new Date(),
         status: "draft",

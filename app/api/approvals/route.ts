@@ -6,10 +6,11 @@ import { guard } from "@/lib/rbac";
 import type { Area } from "@/lib/rbac-shared";
 import {
   APPROVAL_THRESHOLDS,
-  approvalState,
   canDecideApprovals,
   documentInfo,
   isApprovalType,
+  tierState,
+  tiersFor,
 } from "@/lib/approval";
 
 const TYPE_AREA: Record<string, Area[]> = { PurchaseOrder: ["purchasing"], Quotation: ["sales"] };
@@ -37,8 +38,8 @@ export async function GET(req: NextRequest) {
       if (!user.memberships.some((m) => m.companyId === info.companyId && m.isActive)) {
         return NextResponse.json({ error: "Document not found" }, { status: 404 });
       }
-      const { state, approval, threshold } = await approvalState(prisma, type, id, info.amount);
-      return NextResponse.json({ state, approval, threshold, amount: info.amount, canDecide });
+      const { state, tiers, threshold, currentApproval } = await tierState(prisma, type, id, info.amount);
+      return NextResponse.json({ state, approval: currentApproval, tiers, threshold, amount: info.amount, canDecide });
     }
 
     const rows = await prisma.approval.findMany({
@@ -48,9 +49,9 @@ export async function GET(req: NextRequest) {
     });
     const visibleRows = (await Promise.all(rows.map(async (row) => {
       const info = await documentInfo(prisma, row.referenceType, row.referenceId);
-      return info && user.memberships.some((m) => m.companyId === info.companyId && m.isActive) ? row : null;
-    }))).filter((row): row is (typeof rows)[number] => row !== null);
-    const userIds = [...new Set(visibleRows.flatMap((r) => [r.requestedBy, r.approvedBy]).filter(Boolean) as string[])];
+      return info && user.memberships.some((m) => m.companyId === info.companyId && m.isActive) ? { row, info } : null;
+    }))).filter((x): x is { row: (typeof rows)[number]; info: NonNullable<Awaited<ReturnType<typeof documentInfo>>> } => x !== null);
+    const userIds = [...new Set(visibleRows.flatMap(({ row }) => [row.requestedBy, row.approvedBy]).filter(Boolean) as string[])];
     const users = await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } });
     const nameOf = (uid: string | null) => {
       const u = users.find((x) => x.id === uid);
@@ -59,11 +60,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       canDecide,
       thresholds: APPROVAL_THRESHOLDS,
-      approvals: visibleRows.map((r) => ({
+      approvals: visibleRows.map(({ row: r, info }) => ({
         ...r,
         amount: r.amount === null ? null : Number(r.amount),
         requestedByName: nameOf(r.requestedBy),
         approvedByName: nameOf(r.approvedBy),
+        partyName: info.partyName ?? null,
+        items: info.items ?? [],
+        salesOrders: "salesOrders" in info ? info.salesOrders : [],
       })),
     });
   } catch (error) {
@@ -86,18 +90,24 @@ export async function POST(req: NextRequest) {
     if (!user.memberships.some((m) => m.companyId === info.companyId && m.isActive)) {
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
-    const { state } = await approvalState(prisma, referenceType, referenceId, info.amount);
+    const { state, tiers } = await tierState(prisma, referenceType, referenceId, info.amount);
     if (state === "not_required") {
       return NextResponse.json({ error: "Dokumen ini tidak memerlukan persetujuan" }, { status: 400 });
     }
     if (state === "pending" || state === "approved") {
       return NextResponse.json({ error: "Sudah ada pengajuan yang aktif" }, { status: 400 });
     }
+    // The first tier in "none" state is the next one to request — earlier
+    // tiers must already be approved (tierState walks in order and stops
+    // at the first non-approved tier, so this is always the correct next step).
+    // After a rejection the document goes back to the first tier; otherwise to the first tier not yet requested.
+    const nextTierIndex = state === "rejected" ? 0 : tiers.findIndex((t) => t.status === "none");
+    const nextRole = tiers[nextTierIndex === -1 ? 0 : nextTierIndex].role || tiersFor(referenceType)[0];
     const approval = await prisma.approval.create({
       data: {
         referenceType,
         referenceId,
-        approverRole: "Admin",
+        approverRole: nextRole,
         status: "pending",
         amount: info.amount,
         requestedBy: user.id,

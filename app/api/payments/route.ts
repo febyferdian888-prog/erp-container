@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { recalcInvoiceStatus } from "@/lib/workflow";
+import { syncJournal } from "@/lib/accounting";
 import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
 import { guard } from "@/lib/rbac";
 import { referenceCompanyId, userHasCompanyAccess } from "@/lib/company-access";
@@ -64,6 +65,13 @@ export async function POST(req: NextRequest) {
     if (!(await userHasCompanyAccess(prisma, session.user.id, companyId))) {
       return NextResponse.json({ error: "No access" }, { status: 403 });
     }
+    const amountNum = Number(amount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      return NextResponse.json({ error: "Jumlah pembayaran harus lebih dari 0" }, { status: 400 });
+    }
+    if (!paymentDate || Number.isNaN(new Date(paymentDate).getTime())) {
+      return NextResponse.json({ error: "Tanggal pembayaran tidak valid" }, { status: 400 });
+    }
     if (customerId && !(await prisma.customer.findFirst({ where: { id: customerId, companyId }, select: { id: true } }))) {
       return NextResponse.json({ error: "Customer does not belong to this company" }, { status: 400 });
     }
@@ -79,34 +87,36 @@ export async function POST(req: NextRequest) {
     });
     const paymentNumber = formatDocumentNumber("KW", year, count + 1);
 
-    const payment = await prisma.payment.create({
-      data: {
-        companyId,
-        customerId: customerId || null,
-        referenceType: referenceType || null,
-        referenceId: referenceId || null,
-        paymentNumber,
-        paymentDate: new Date(paymentDate),
-        amount,
-        method,
-        bankAccount,
-        description,
-        notes,
-        status: "recorded",
-        ...(referenceType === "Invoice" && referenceId
-          ? { allocations: { create: [{ invoiceId: referenceId, amount }] } }
-          : {}),
-      },
-      include: { customer: true },
+    const payment = await prisma.$transaction(async (tx) => {
+      const created = await tx.payment.create({
+        data: {
+          companyId,
+          customerId: customerId || null,
+          referenceType: referenceType || null,
+          referenceId: referenceId || null,
+          paymentNumber,
+          paymentDate: new Date(paymentDate),
+          amount: amountNum,
+          method,
+          bankAccount,
+          description,
+          notes,
+          status: "recorded",
+          ...(referenceType === "Invoice" && referenceId
+            ? { allocations: { create: [{ invoiceId: referenceId, amount: amountNum }] } }
+            : {}),
+        },
+        include: { customer: true },
+      });
+      if (referenceType === "Invoice" && referenceId) {
+        await tx.invoice.update({ where: { id: referenceId }, data: { paidAmount: { increment: amountNum } } });
+      }
+      return created;
     });
 
-    if (referenceType === "Invoice" && referenceId) {
-      await prisma.invoice.update({
-        where: { id: referenceId },
-        data: { paidAmount: { increment: amount } },
-      });
-      await recalcInvoiceStatus(prisma, referenceId);
-    }
+    // Status and journals are refreshed after commit: the sync hooks skip rows still inside a transaction.
+    if (referenceType === "Invoice" && referenceId) await recalcInvoiceStatus(prisma, referenceId);
+    await syncJournal(prisma, "Payment", payment.id);
 
     return NextResponse.json(payment, { status: 201 });
   } catch (error) {

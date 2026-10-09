@@ -62,6 +62,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const pendingDraft = await prisma.goodsReceipt.findFirst({
+      where: { poId, deletedAt: null, autoCreated: true, stockApplied: false },
+      select: { receiptNumber: true },
+    });
+    if (pendingDraft) {
+      return NextResponse.json(
+        { error: `PO ini sudah punya draft goods receipt ${pendingDraft.receiptNumber} yang menunggu dikonfirmasi. Buka dan konfirmasi draft itu, jangan buat baru.` },
+        { status: 400 }
+      );
+    }
+
     const { year, start, end } = currentYearRange();
     const count = await prisma.goodsReceipt.count({
       where: { companyId, createdAt: { gte: start, lt: end } },

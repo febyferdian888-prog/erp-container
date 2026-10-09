@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { DashboardLayout } from "@/components/dashboard-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { ACTIVE_ORDER_VALUE_LABEL, ACTIVE_ORDER_VALUE_HINT } from "@/lib/sales-metrics";
 import {
   Plus,
   Search,
@@ -24,10 +25,20 @@ interface SalesOrder {
   poNumber: string;
   poDate: string;
   status: string;
+  progress?: { key: string; label: string; tone: string };
   customer: { name: string; code: string };
   quotation: { number: string } | null;
   items: { quantity: string; unitPrice: string; subtotal: string }[];
 }
+
+const PROGRESS_STYLES: Record<string, string> = {
+  slate: "bg-slate-100 text-slate-700 ring-slate-200",
+  indigo: "bg-indigo-100 text-indigo-700 ring-indigo-200",
+  amber: "bg-amber-100 text-amber-700 ring-amber-200",
+  blue: "bg-blue-100 text-blue-700 ring-blue-200",
+  green: "bg-green-100 text-green-700 ring-green-200",
+  red: "bg-red-100 text-red-700 ring-red-200",
+};
 
 const STATUS_STYLES: Record<string, string> = {
   draft: "bg-slate-100 text-slate-700 ring-slate-200",
@@ -39,8 +50,18 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export default function SalesOrdersPage() {
+  return (
+    <Suspense fallback={<DashboardLayout><div className="flex items-center justify-center h-96"><p className="text-slate-500">Loading...</p></div></DashboardLayout>}>
+      <SalesOrdersContent />
+    </Suspense>
+  );
+}
+
+function SalesOrdersContent() {
   const { status } = useSession();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const filterActive = searchParams.get("status") === "active";
   const [orders, setOrders] = useState<SalesOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -84,20 +105,28 @@ export default function SalesOrdersPage() {
     }
   };
 
-  const filtered = orders.filter(
-    (o) =>
-      o.soNumber.toLowerCase().includes(search.toLowerCase()) ||
-      o.customer.name.toLowerCase().includes(search.toLowerCase()) ||
-      o.poNumber.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = orders
+    .filter(
+      (o) =>
+        o.soNumber.toLowerCase().includes(search.toLowerCase()) ||
+        o.customer.name.toLowerCase().includes(search.toLowerCase()) ||
+        o.poNumber.toLowerCase().includes(search.toLowerCase())
+    )
+    .filter((o) => !filterActive || o.progress?.key !== "done");
 
   const orderTotal = (o: SalesOrder) => o.items.reduce((sum, item) => sum + Number(item.subtotal), 0);
   const formatPrice = (value: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(value);
 
-  const activeOrders = orders.filter((o) => !["invoiced", "cancelled"].includes(o.status));
+  // Driven by the same lib/so-progress.ts signals as the status badge below
+  // (PO/receipt/delivery/invoice), not the legacy `status` column — that
+  // column can sit at "draft" indefinitely while real work is happening
+  // (Tahap 5 audit), which silently zeroed this out. Must always agree with
+  // the dashboard's "Pesanan aktif" tile (app/api/reports/dashboard/route.ts).
+  const activeOrders = orders.filter((o) => o.progress?.key !== "done");
+  const activeOrderValue = activeOrders.reduce((sum, o) => sum + orderTotal(o), 0);
   const totalValue = orders.reduce((sum, o) => sum + orderTotal(o), 0);
-  const inProgress = orders.filter((o) => ["confirmed", "partially_delivered"].includes(o.status)).length;
+  const inProgress = activeOrders.length;
   const completed = orders.filter((o) => o.status === "invoiced").length;
 
   if (status === "loading" || loading) {
@@ -130,29 +159,44 @@ export default function SalesOrdersPage() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="border border-slate-200 bg-white p-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="border border-slate-200 bg-white p-5" title={ACTIVE_ORDER_VALUE_HINT}>
             <div className="flex items-center gap-2">
               <Wallet size={14} className="text-slate-400" />
-              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Active Order Value</p>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{ACTIVE_ORDER_VALUE_LABEL}</p>
+            </div>
+            <p className="text-xl font-semibold text-slate-900 tabular-nums mt-3">{formatPrice(activeOrderValue)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Belum ditagih sama sekali</p>
+          </div>
+          <div className="border border-slate-200 bg-white p-5" title="Total nilai seluruh pesanan tercatat, termasuk yang sudah ditagih atau dibatalkan.">
+            <div className="flex items-center gap-2">
+              <Wallet size={14} className="text-slate-400" />
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Total Nilai Pesanan</p>
             </div>
             <p className="text-xl font-semibold text-slate-900 tabular-nums mt-3">{formatPrice(totalValue)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Semua status, termasuk sudah ditagih</p>
           </div>
-          <div className="border border-slate-200 bg-white p-5">
+          <div className="border border-slate-200 bg-white p-5" title="Pesanan yang sudah dikonfirmasi dan masih berjalan (belum ditagih sama sekali).">
             <div className="flex items-center gap-2">
               <Clock size={14} className="text-slate-400" />
-              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In Progress</p>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Sedang Berjalan</p>
             </div>
             <p className="text-xl font-semibold text-slate-900 tabular-nums mt-3">{inProgress}</p>
           </div>
-          <div className="border border-slate-200 bg-white p-5">
+          <div className="border border-slate-200 bg-white p-5" title="Pesanan yang sudah memiliki invoice. Tidak berarti seluruh pekerjaan sudah selesai atau lunas.">
             <div className="flex items-center gap-2">
               <CheckCircle2 size={14} className="text-slate-400" />
-              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Fully Invoiced</p>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Sudah Ditagih</p>
             </div>
             <p className="text-xl font-semibold text-slate-900 tabular-nums mt-3">{completed}</p>
           </div>
         </div>
+        {filterActive && (
+          <div className="flex items-center justify-between rounded-md border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm text-indigo-800">
+            <span>Menampilkan hanya pesanan aktif (belum ditagih).</span>
+            <button className="underline" onClick={() => router.push("/sales/orders")}>Hapus filter</button>
+          </div>
+        )}
 
         <Card>
           <CardContent className="pt-6">
@@ -207,10 +251,10 @@ export default function SalesOrdersPage() {
                       <td className="px-5 py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${
-                            STATUS_STYLES[o.status] || "bg-slate-100 text-slate-700 ring-slate-200"
+                            (o.progress && PROGRESS_STYLES[o.progress.tone]) || STATUS_STYLES[o.status] || "bg-slate-100 text-slate-700 ring-slate-200"
                           }`}
                         >
-                          {o.status.replace(/_/g, " ")}
+                          {o.progress?.label || o.status.replace(/_/g, " ")}
                         </span>
                       </td>
                       <td className="px-5 py-3 text-right space-x-1">

@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { companyId, code, name, email, phone, address, city, province, country, postalCode, npwp, bankAccount, bankName } = body;
+    const { companyId, code, name, email, phone, address, city, province, country, postalCode, npwp, bankAccount, bankName, picName } = body;
 
     const existing = await prisma.supplier.findUnique({
       where: { companyId_code: { companyId, code } },
@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
         npwp,
         bankAccount,
         bankName,
+        picName,
         isActive: true,
       },
     });

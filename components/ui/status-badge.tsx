@@ -2,9 +2,9 @@ type Tone = "neutral" | "info" | "warning" | "success" | "danger";
 
 const KEYWORD_TONE: Array<[RegExp, Tone]> = [
   [/^draft$/, "neutral"],
-  [/reject|cancel|expired|overdue|void/, "danger"],
-  [/partial|review|revision/, "warning"],
-  [/accept|approve|paid|receiv|deliver|complet|closed|invoiced/, "success"],
+  [/reject|cancel|expired|overdue|void|fail/, "danger"],
+  [/partial|review|revision|rework/, "warning"],
+  [/accept|approve|paid|receiv|deliver|complet|closed|invoiced|passed|signed/, "success"],
   [/sent|pending|transit|submit|open|confirm/, "info"],
 ];
 

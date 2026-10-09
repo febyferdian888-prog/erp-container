@@ -24,7 +24,9 @@ interface PurchaseOrder {
   status: string;
   supplier: { name: string; code: string };
   purchaseRequest: { requestNumber: string } | null;
-  salesOrder: { soNumber: string } | null;
+  salesOrder: { id: string; soNumber: string } | null;
+  salesOrders?: { id: string; soNumber: string }[];
+  stage?: { label: string; next: string; tone: string };
   items: { quantity: string; unitPrice: string; subtotal: string }[];
 }
 
@@ -171,7 +173,7 @@ export default function PurchaseOrdersPage() {
                       <TableHead>Source PR</TableHead>
                       <TableHead>Sales Order</TableHead>
                       <TableHead className="text-right">Total</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead>Status / langkah berikutnya</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -185,7 +187,10 @@ export default function PurchaseOrdersPage() {
                           {o.purchaseRequest?.requestNumber || "-"}
                         </TableCell>
                         <TableCell className="text-sm text-slate-500">
-                          {o.salesOrder?.soNumber || "-"}
+                          {(o.salesOrders && o.salesOrders.length ? o.salesOrders : o.salesOrder ? [o.salesOrder] : []).map((so, i) => (
+                            <span key={so.id}>{i > 0 ? ", " : ""}<a href={`/supply-chain/sales-orders/${so.id}`} className="hover:underline">{so.soNumber}</a></span>
+                          ))}
+                          {!(o.salesOrders && o.salesOrders.length) && !o.salesOrder && "-"}
                         </TableCell>
                         <TableCell className="text-right font-semibold">{formatPrice(orderTotal(o))}</TableCell>
                         <TableCell>
@@ -196,6 +201,12 @@ export default function PurchaseOrdersPage() {
                           >
                             {o.status.replace(/_/g, " ")}
                           </span>
+                          {o.stage && (
+                            <div className="mt-1 max-w-[240px] text-xs leading-tight">
+                              <p className="font-medium text-slate-800">{o.stage.label}</p>
+                              <p className="text-slate-500">{o.stage.next}</p>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-right space-x-2">
                           <Button
