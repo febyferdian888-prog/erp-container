@@ -169,9 +169,10 @@ async function buildDraft(db: Db, sourceType: string, sourceId: string): Promise
   return null;
 }
 
-const same = (a: { accountCode: string; debitAmount: unknown; creditAmount: unknown }[], b: Line[]) =>
+// Line descriptions are compared too: they carry the document number, so a renumbered invoice must refresh its journal.
+const same = (a: { accountCode: string; description: string | null; debitAmount: unknown; creditAmount: unknown }[], b: Line[]) =>
   a.length === b.length &&
-  a.every((x, i) => x.accountCode === b[i].accountCode && Number(x.debitAmount) === b[i].debit && Number(x.creditAmount) === b[i].credit);
+  a.every((x, i) => x.accountCode === b[i].accountCode && (x.description ?? "") === (b[i].description ?? "") && Number(x.debitAmount) === b[i].debit && Number(x.creditAmount) === b[i].credit);
 
 // Keeps the system-generated journal for one source document in step with the document.
 export async function syncJournal(db: Db, sourceType: string, sourceId: string) {
@@ -189,7 +190,7 @@ export async function syncJournal(db: Db, sourceType: string, sourceId: string) 
   await ensureDefaultAccounts(db, draft.companyId);
 
   if (existing) {
-    if (existing.entryDate.getTime() === draft.date.getTime() && same(existing.lines, draft.lines)) return;
+    if (existing.entryDate.getTime() === draft.date.getTime() && existing.description === draft.description && same(existing.lines, draft.lines)) return;
     await db.journalLine.deleteMany({ where: { journalId: existing.id } });
     await db.journalEntry.update({
       where: { id: existing.id },

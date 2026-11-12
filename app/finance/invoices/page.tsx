@@ -28,6 +28,8 @@ interface Invoice {
   grandTotal: number;
   paidAmount: number;
   pphAmount: number;
+  ppnPercent?: number | string;
+  taxInvoiceNumber?: string | null;
 }
 
 // Document-level tone (draft/sent/cancelled); payment state below is always
@@ -183,6 +185,9 @@ export default function InvoicesPage() {
                               <span className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide capitalize ${STATUS_COLORS[inv.status] || "bg-slate-100 text-slate-800"}`}>
                                 {inv.status}
                               </span>
+                            )}
+                            {!money.isCancelled && Number(inv.ppnPercent ?? 0) > 0 && !inv.taxInvoiceNumber && (
+                              <span className="bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">FP belum ada</span>
                             )}
                             {!money.isCancelled && (
                               <span className={`px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${PAYMENT_COLORS[money.paymentState]}`}>

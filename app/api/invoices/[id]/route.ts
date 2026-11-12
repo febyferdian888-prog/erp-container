@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { recalcInvoiceStatus, recalcSalesOrderStatus } from "@/lib/workflow";
 import { guard } from "@/lib/rbac";
+import { parseTaxInvoiceNumber } from "@/lib/tax-invoice";
 
 export async function GET(
   req: NextRequest,
@@ -56,7 +57,7 @@ export async function PUT(
     }
 
     const body = await req.json();
-    const { items, invoiceDate, dueDate, ppnPercent, pphAmount, pphProofNumber, pphProofDate, ...rest } = body;
+    const { items, invoiceDate, dueDate, ppnPercent, pphAmount, pphProofNumber, pphProofDate, taxInvoiceNumber, taxInvoiceDate, ...rest } = body;
 
     const lineItems = (items || []).map((item: any) => ({
       lineNumber: item.lineNumber,
@@ -75,12 +76,40 @@ export async function PUT(
     const newPph = pphAmount === undefined ? Number(invoice.pphAmount) : Math.min(Math.max(Number(pphAmount) || 0, 0), grandTotal);
     const pphDelta = newPph - Number(invoice.pphAmount);
 
+    // Faktur pajak: nomor is 16 digits and unique per company. An invoice with PPN cannot be
+    // validated (draft -> sent) before it carries one.
+    let fpData: Record<string, unknown> = {};
+    if (taxInvoiceNumber !== undefined) {
+      const raw = String(taxInvoiceNumber ?? "").trim();
+      if (!raw) {
+        fpData = { taxInvoiceNumber: null, taxInvoiceDate: null, taxInvoiceCheckedBy: null, taxInvoiceCheckedAt: null };
+      } else {
+        const fp = parseTaxInvoiceNumber(raw);
+        if (!fp.ok) return NextResponse.json({ error: fp.error }, { status: 400 });
+        const clash = await prisma.invoice.findFirst({ where: { companyId: invoice.companyId, taxInvoiceNumber: fp.value, id: { not: id }, deletedAt: null }, select: { invoiceNumber: true } });
+        if (clash) return NextResponse.json({ error: "Nomor faktur pajak ini sudah dipakai invoice " + clash.invoiceNumber }, { status: 400 });
+        const fpDate = taxInvoiceDate ? new Date(taxInvoiceDate) : null;
+        if (fpDate && Number.isNaN(fpDate.getTime())) return NextResponse.json({ error: "Tanggal faktur pajak tidak valid" }, { status: 400 });
+        const changed = fp.value !== invoice.taxInvoiceNumber;
+        fpData = {
+          taxInvoiceNumber: fp.value,
+          taxInvoiceDate: fpDate,
+          ...(changed || !invoice.taxInvoiceCheckedAt ? { taxInvoiceCheckedBy: session.user.email, taxInvoiceCheckedAt: new Date() } : {}),
+        };
+      }
+    }
+    const nextFp = "taxInvoiceNumber" in fpData ? (fpData.taxInvoiceNumber as string | null) : invoice.taxInvoiceNumber;
+    if (rest.status === "sent" && invoice.status === "draft" && ppn > 0 && !nextFp) {
+      return NextResponse.json({ error: "Isi nomor faktur pajak dulu sebelum invoice divalidasi (status sent)" }, { status: 400 });
+    }
+
     await prisma.invoiceItem.deleteMany({ where: { invoiceId: id } });
 
     const updated = await prisma.invoice.update({
       where: { id },
       data: {
         ...rest,
+        ...fpData,
         invoiceDate: invoiceDate ? new Date(invoiceDate) : undefined,
         dueDate: dueDate ? new Date(dueDate) : null,
         ppnPercent: ppn,

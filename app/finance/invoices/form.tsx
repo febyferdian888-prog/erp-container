@@ -64,6 +64,8 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
   const [origPph, setOrigPph] = useState(0);
   const [proofNo, setProofNo] = useState("");
   const [proofDate, setProofDate] = useState("");
+  const [fpNo, setFpNo] = useState("");
+  const [fpDate, setFpDate] = useState("");
   const [salesOrders, setSalesOrders] = useState<SalesOrderOption[]>([]);
   const [soId, setSoId] = useState("");
   const [items, setItems] = useState<LineItem[]>([
@@ -116,6 +118,8 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
         setPph(Number(data.pphAmount || 0));
         setOrigPph(Number(data.pphAmount || 0));
         setProofNo(data.pphProofNumber || "");
+        setFpNo(data.taxInvoiceNumber || "");
+        setFpDate(data.taxInvoiceDate ? data.taxInvoiceDate.split("T")[0] : "");
         setProofDate(data.pphProofDate ? data.pphProofDate.split("T")[0] : "");
         if (data.items && data.items.length > 0) {
           setItems(
@@ -258,6 +262,7 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
           pphAmount: pph,
           pphProofNumber: proofNo,
           pphProofDate: proofDate || null,
+          ...(invoiceId ? { taxInvoiceNumber: fpNo, taxInvoiceDate: fpDate || null } : {}),
           status: formData.docStatus,
           notes: formData.notes,
           items: items.map((item) => ({
@@ -408,6 +413,16 @@ export function InvoiceForm({ invoiceId, companyId }: InvoiceFormProps) {
                   <Label htmlFor="ppnPercent">PPN (%)</Label>
                   <Input id="ppnPercent" name="ppnPercent" type="number" min="0" step="0.01" value={formData.ppnPercent} onChange={handleChange} />
                 </div>
+                {invoiceId && (
+                  <div className="space-y-2">
+                    <Label htmlFor="fpNo">Nomor faktur pajak (16 digit)</Label>
+                    <Input id="fpNo" inputMode="numeric" placeholder="010.000-26.12345678" value={fpNo} onChange={(e) => setFpNo(e.target.value)} />
+                    <Input type="date" aria-label="Tanggal faktur pajak" value={fpDate} onChange={(e) => setFpDate(e.target.value)} />
+                    <p className="text-[11px] text-slate-400">
+                      {formData.ppnPercent > 0 ? "Wajib diisi sebelum status diubah ke sent (validasi invoice)." : "Invoice tanpa PPN tidak butuh faktur pajak."}
+                    </p>
+                  </div>
+                )}
                 {invoiceId && (
                   <div className="space-y-2">
                     <Label htmlFor="docStatus">Status dokumen</Label>

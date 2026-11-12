@@ -5,6 +5,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { guard } from "@/lib/rbac";
 import { userHasCompanyAccess } from "@/lib/company-access";
 import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
+import { parseTaxInvoiceNumber } from "@/lib/tax-invoice";
+import { expectedFromLines, refreshBillMatch } from "@/lib/three-way-match";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -35,6 +37,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       select: {
         id: true, billNumber: true, billKind: true, status: true, vendorInvoiceNumber: true, billDate: true, dueDate: true,
         totalAmount: true, ppnPercent: true, taxAmount: true, grandTotal: true, paidAmount: true, pphAmount: true,
+        matchStatus: true, matchNote: true, matchOverrideAt: true, matchOverrideBy: true, matchOverrideNote: true,
+        vendorTaxInvoiceNumber: true, vendorTaxInvoiceDate: true,
       },
     });
     const subtotal = po.items.reduce((s, i) => s + Number(i.subtotal), 0);
@@ -183,9 +187,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       });
       if (dup) return NextResponse.json({ error: `Invoice vendor ${vendorRef} sudah pernah diinput sebagai ${dup.billNumber}` }, { status: 400 });
 
+      // Faktur pajak masukan: needed to credit the PPN, so a bill with PPN does not come in without one.
+      let vendorFp: string | null = null;
+      const fpRaw = String(body.vendorTaxInvoiceNumber ?? "").trim();
+      if (fpRaw || ppn > 0) {
+        const fp = parseTaxInvoiceNumber(fpRaw);
+        if (!fp.ok) return NextResponse.json({ error: fp.error.replace("Nomor faktur pajak", "Nomor faktur pajak vendor") }, { status: 400 });
+        vendorFp = fp.value;
+        const fpDup = await prisma.bill.findFirst({
+          where: { companyId: po.companyId, supplierId: po.supplierId, deletedAt: null, id: { not: bill.id }, vendorTaxInvoiceNumber: vendorFp },
+          select: { billNumber: true },
+        });
+        if (fpDup) return NextResponse.json({ error: `Faktur pajak ${vendorFp} sudah dipakai di ${fpDup.billNumber}` }, { status: 400 });
+      }
+      const fpDate = body.vendorTaxInvoiceDate ? new Date(body.vendorTaxInvoiceDate) : null;
+      if (fpDate && Number.isNaN(fpDate.getTime())) return NextResponse.json({ error: "Tanggal faktur pajak tidak valid" }, { status: 400 });
+
       const taxAmount = r2((totalAmount * ppn) / 100);
       const billLines = await prisma.billItem.findMany({ where: { billId: bill.id }, orderBy: { lineNumber: "asc" } });
       const linked = billLines.filter((l) => l.poItemId);
+      // Frozen before the lines are rewritten to the vendor's total: this is what the PO says the bill should be.
+      const expectedAmount = linked.length ? expectedFromLines(billLines) : null;
       if (linked.length === 0) {
         await prisma.billItem.updateMany({ where: { billId: bill.id, lineNumber: 1 }, data: { unitPrice: totalAmount, subtotal: totalAmount } });
       } else {
@@ -210,11 +232,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       await prisma.bill.update({
         where: { id: bill.id },
         data: {
-          status: "received", vendorInvoiceNumber: vendorRef, billDate, dueDate, ppnPercent: ppn,
+          status: "received", vendorInvoiceNumber: vendorRef, vendorTaxInvoiceNumber: vendorFp, vendorTaxInvoiceDate: fpDate, billDate, dueDate, ppnPercent: ppn,
           totalAmount, taxAmount, grandTotal: r2(totalAmount + taxAmount),
+          ...(expectedAmount != null ? { expectedAmount } : {}),
         },
       });
-      return NextResponse.json({ ok: true });
+      const match = await refreshBillMatch(prisma, bill.id);
+      return NextResponse.json({ ok: true, match: match ? { status: match.status, note: match.note } : null });
     }
 
     return NextResponse.json({ error: "Aksi tidak dikenal" }, { status: 400 });

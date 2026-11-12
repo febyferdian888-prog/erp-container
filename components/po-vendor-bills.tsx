@@ -39,6 +39,8 @@ function statusOf(b: BillRow) {
 
 interface FormState {
   vendorInvoiceNumber: string;
+  vendorTaxInvoiceNumber: string;
+  vendorTaxInvoiceDate: string;
   billDate: string;
   dueDate: string;
   totalAmount: string;
@@ -50,7 +52,7 @@ export function PoVendorBills({ poId }: { poId: string }) {
   const [data, setData] = useState<Data | null>(null);
   const [openId, setOpenId] = useState<string | null>(null); // bill being marked received, or "new"
   const [newKind, setNewKind] = useState<"regular" | "down_payment">("regular");
-  const [form, setForm] = useState<FormState>({ vendorInvoiceNumber: "", billDate: today(), dueDate: "", totalAmount: "" });
+  const [form, setForm] = useState<FormState>({ vendorInvoiceNumber: "", vendorTaxInvoiceNumber: "", vendorTaxInvoiceDate: "", billDate: today(), dueDate: "", totalAmount: "" });
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +71,7 @@ export function PoVendorBills({ poId }: { poId: string }) {
     setOpenId(id);
     setError(null);
     setFile(null);
-    setForm({ vendorInvoiceNumber: "", billDate: today(), dueDate: "", totalAmount: String(amount || "") });
+    setForm({ vendorInvoiceNumber: "", vendorTaxInvoiceNumber: "", vendorTaxInvoiceDate: "", billDate: today(), dueDate: "", totalAmount: String(amount || "") });
   };
 
   const post = async (body: unknown) => {
@@ -86,6 +88,7 @@ export function PoVendorBills({ poId }: { poId: string }) {
   const submit = async () => {
     if (!file) return setError("Pilih file PDF tagihan dari vendor");
     if (!form.vendorInvoiceNumber.trim()) return setError("Nomor invoice vendor wajib diisi");
+    if (data.ppnPercent > 0 && form.vendorTaxInvoiceNumber.replace(/D/g, "").length !== 16) return setError("Nomor faktur pajak vendor wajib diisi (16 digit)");
     if (!(Number(form.totalAmount) > 0)) return setError("Isi nilai tagihan sebelum PPN");
     setBusy(true);
     setError(null);
@@ -122,6 +125,14 @@ export function PoVendorBills({ poId }: { poId: string }) {
         <label className="text-xs text-slate-600">
           Nomor invoice vendor *
           <input className={input} value={form.vendorInvoiceNumber} onChange={(e) => setForm({ ...form, vendorInvoiceNumber: e.target.value })} />
+        </label>
+        <label className="text-xs text-slate-600">
+          Nomor faktur pajak vendor{data.ppnPercent > 0 ? " *" : ""}
+          <input className={input} inputMode="numeric" placeholder="16 digit" value={form.vendorTaxInvoiceNumber} onChange={(e) => setForm({ ...form, vendorTaxInvoiceNumber: e.target.value })} />
+        </label>
+        <label className="text-xs text-slate-600">
+          Tanggal faktur pajak
+          <input className={input} type="date" value={form.vendorTaxInvoiceDate} onChange={(e) => setForm({ ...form, vendorTaxInvoiceDate: e.target.value })} />
         </label>
         <label className="text-xs text-slate-600">
           Nilai tagihan sebelum PPN *

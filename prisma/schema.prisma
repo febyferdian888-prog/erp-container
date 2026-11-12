@@ -1067,6 +1067,10 @@ model Invoice {
   pphProofNumber String? // bukti potong received from the customer
   pphProofDate  DateTime?
   notes         String?
+  taxInvoiceNumber String? // nomor faktur pajak keluaran, digits only (16 digits under Coretax)
+  taxInvoiceDate   DateTime?
+  taxInvoiceCheckedBy String? // finance who checked the faktur pajak against the invoice
+  taxInvoiceCheckedAt DateTime?
   collectionsPic String? // email of the staff member assigned to collect this invoice (Tahap 2 AR workbench)
   createdBy     String?
   createdAt     DateTime @default(now())
@@ -1157,6 +1161,14 @@ model Bill {
   pphProofDate  DateTime?
   pphRemittedAt DateTime? // date we paid the withheld tax to the tax office
   billKind      String   @default("regular") // regular, down_payment (DP requested by purchasing from a PO)
+  vendorTaxInvoiceNumber String? // nomor faktur pajak masukan from the vendor, digits only
+  vendorTaxInvoiceDate   DateTime?
+  expectedAmount Decimal? @db.Decimal(19, 2) // 3-way match: what the PO prices x received qty (less pro-rata DP) says this bill should total
+  matchStatus   String? // matched, variance, not_received, legacy; null = not evaluated (DP bills)
+  matchNote     String?
+  matchOverrideBy   String? // finance approved paying a bill that did not match
+  matchOverrideAt   DateTime?
+  matchOverrideNote String?
   notes         String?
   createdBy     String?
   createdAt     DateTime @default(now())

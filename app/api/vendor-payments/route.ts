@@ -6,6 +6,7 @@ import { recalcBillStatus } from "@/lib/workflow";
 import { syncJournal } from "@/lib/accounting";
 import { formatDocumentNumber, currentYearRange } from "@/lib/document-number";
 import { guard } from "@/lib/rbac";
+import { isPayableByMatch, refreshBillMatch } from "@/lib/three-way-match";
 import { referenceCompanyId, userHasCompanyAccess } from "@/lib/company-access";
 
 export async function GET(req: NextRequest) {
@@ -95,6 +96,11 @@ export async function POST(req: NextRequest) {
       }
       if (bill.status === "draft" || bill.status === "cancelled") {
         return NextResponse.json({ error: "Bill ini belum dicatat masuk atau sudah dibatalkan, belum bisa dibayar" }, { status: 400 });
+      }
+      // 3-way match: PO, goods receipt and the vendor's invoice must agree, or Finance signs off on the difference.
+      const live = await refreshBillMatch(prisma, bill.id);
+      if (!isPayableByMatch(bill, live)) {
+        return NextResponse.json({ error: `Tagihan belum lolos 3-way match: ${live?.note}. Selesaikan selisihnya atau setujui pengecualian di daftar tugas Finance.`, code: "match_blocked" }, { status: 409 });
       }
       const outstanding = Number(bill.grandTotal) - Number(bill.paidAmount);
       if (amountNum > outstanding + 0.5) {

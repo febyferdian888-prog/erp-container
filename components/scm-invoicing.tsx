@@ -24,7 +24,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 export function ScmInvoicing({ pos, onChanged }: { pos: InvoicingPo[]; onChanged: () => void }) {
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [formFor, setFormFor] = useState<string | null>(null);
-  const [form, setForm] = useState({ vendorInvoiceNumber: "", billDate: today(), dueDate: "", totalAmount: "" });
+  const [form, setForm] = useState({ vendorInvoiceNumber: "", vendorTaxInvoiceNumber: "", vendorTaxInvoiceDate: "", billDate: today(), dueDate: "", totalAmount: "" });
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,12 +48,13 @@ export function ScmInvoicing({ pos, onChanged }: { pos: InvoicingPo[]; onChanged
     setFormFor(po.poId);
     setError(null);
     setFile(null);
-    setForm({ vendorInvoiceNumber: "", billDate: today(), dueDate: "", totalAmount: String(suggested(po).net || "") });
+    setForm({ vendorInvoiceNumber: "", vendorTaxInvoiceNumber: "", vendorTaxInvoiceDate: "", billDate: today(), dueDate: "", totalAmount: String(suggested(po).net || "") });
   };
 
   const submit = async (po: InvoicingPo) => {
     if (!file) return setError("Pilih PDF tagihan dari vendor");
     if (!form.vendorInvoiceNumber.trim()) return setError("Nomor invoice vendor wajib diisi");
+    if (po.ppnPercent > 0 && form.vendorTaxInvoiceNumber.replace(/D/g, "").length !== 16) return setError("Nomor faktur pajak vendor wajib diisi (16 digit)");
     if (!(Number(form.totalAmount) > 0)) return setError("Isi nilai tagihan sebelum PPN");
     setBusy(true);
     setError(null);
@@ -136,6 +137,8 @@ export function ScmInvoicing({ pos, onChanged }: { pos: InvoicingPo[]; onChanged
                 </p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="text-xs text-slate-600">Nomor invoice vendor *<input className={input} value={form.vendorInvoiceNumber} onChange={(e) => setForm({ ...form, vendorInvoiceNumber: e.target.value })} /></label>
+                  <label className="text-xs text-slate-600">Nomor faktur pajak vendor{po.ppnPercent > 0 ? " *" : ""}<input className={input} inputMode="numeric" placeholder="16 digit" value={form.vendorTaxInvoiceNumber} onChange={(e) => setForm({ ...form, vendorTaxInvoiceNumber: e.target.value })} /></label>
+                  <label className="text-xs text-slate-600">Tanggal faktur pajak<input className={input} type="date" value={form.vendorTaxInvoiceDate} onChange={(e) => setForm({ ...form, vendorTaxInvoiceDate: e.target.value })} /></label>
                   <label className="text-xs text-slate-600">Nilai sebelum PPN *<input className={input} type="number" min="0" step="0.01" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} /></label>
                   <label className="text-xs text-slate-600">Tanggal tagihan *<input className={input} type="date" value={form.billDate} onChange={(e) => setForm({ ...form, billDate: e.target.value })} /></label>
                   <label className="text-xs text-slate-600">Jatuh tempo<input className={input} type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} /></label>
